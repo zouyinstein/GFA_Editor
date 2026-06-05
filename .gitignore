@@ -1,0 +1,14 @@
+.venv/
+.local/
+.pyinstaller/
+__pycache__/
+*.pyc
+.DS_Store
+node_modules/
+build/
+dist/
+server_data/
+*.edited.gfa
+uvicorn.log
+packaging/bin/*/
+!packaging/bin/README.md

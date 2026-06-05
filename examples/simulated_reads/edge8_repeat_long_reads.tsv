@@ -1,0 +1,12 @@
+read_id	length	purpose	intended_graph_path	paf_targets
+sim_repeat_edge8_full_query	1626	edge_8 repeat-only query; highlights the repeat node without crossing a link	edge_8	edge_8
+sim_link_edge8_to_edge10	800	short read crossing the edge_8+ -> edge_10+ link	edge_8+ -> edge_10+	edge_8,edge_10
+sim_link_edge8_to_edge11	800	short read crossing the edge_8+ -> edge_11+ link	edge_8+ -> edge_11+	edge_8,edge_11
+sim_link_edge9_to_edge8	840	short read crossing the edge_9+ -> edge_8- side of the repeat	edge_9+ -> edge_8-	edge_9,edge_8
+sim_link_edge28_to_edge8	840	short read crossing the edge_28- -> edge_8- side of the repeat	edge_28- -> edge_8-	edge_28,edge_8
+sim_repeat_path_A_edge9_edge8_edge10	2826	repeat-resolving read: edge_9 -> full edge_8 -> edge_10	edge_9+ -> edge_8- ... edge_8+ -> edge_10+	edge_9,edge_8,edge_10
+sim_repeat_path_B_edge28_edge8_edge11	2826	repeat-resolving read: edge_28 -> full edge_8 -> edge_11	edge_28- -> edge_8- ... edge_8+ -> edge_11+	edge_28,edge_8,edge_11
+sim_repeat_path_C_edge9_edge8_edge11	2826	alternate repeat path: edge_9 -> full edge_8 -> edge_11	edge_9+ -> edge_8- ... edge_8+ -> edge_11+	edge_9,edge_8,edge_11
+sim_whole_edge10_edge8_edge10_edge29	16704	long read crossing the entire edge_10: edge_8 -> full edge_10 -> edge_29	edge_8+ -> edge_10+ ... edge_10+ -> edge_29+	edge_8,edge_10,edge_29
+sim_whole_edge11_edge8_edge11_edge33	9252	long read crossing the entire edge_11: edge_8 -> full edge_11 -> edge_33	edge_8+ -> edge_11+ ... edge_11+ -> edge_33+	edge_8,edge_11,edge_33
+sim_edge8_internal_401_1000	600	internal partial read on edge_8 positions 401-1000	edge_8:401-1000	edge_8

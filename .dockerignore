@@ -1,0 +1,12 @@
+.git
+.venv
+.local
+.pytest_cache
+__pycache__
+*.pyc
+.DS_Store
+dist
+build
+server_data
+uvicorn.log
+node_modules

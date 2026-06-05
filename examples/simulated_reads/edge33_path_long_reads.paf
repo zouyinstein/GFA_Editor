@@ -1,0 +1,10 @@
+sim_edge33_internal_12001_18000	6000	0	6000	+	edge_33	52276	12000	18000	6000	6000	60	NM:i:0	ms:i:12000	AS:i:12000	nn:i:0	tp:A:P	cm:i:1095	s1:i:5989	s2:i:0	de:f:0	rl:i:0	cg:Z:6000M
+sim_edge33_internal_36001_43000	7000	0	7000	+	edge_33	52276	36000	43000	7000	7000	60	NM:i:0	ms:i:14000	AS:i:14000	nn:i:0	tp:A:P	cm:i:1285	s1:i:6991	s2:i:51	de:f:0	rl:i:0	cg:Z:7000M
+sim_link_edge11_to_edge33	2000	800	2000	+	edge_33	52276	0	1200	1200	1200	60	NM:i:0	ms:i:2400	AS:i:2400	nn:i:0	tp:A:P	cm:i:228	s1:i:1188	s2:i:0	de:f:0	rl:i:0	cg:Z:1200M
+sim_link_edge11_to_edge33	2000	0	800	+	edge_11	8252	7452	8252	800	800	60	NM:i:0	ms:i:1600	AS:i:1600	nn:i:0	tp:A:P	cm:i:153	s1:i:788	s2:i:94	de:f:0	rl:i:0	cg:Z:800M
+sim_link_edge25_to_edge33_reverse_side	2000	800	2000	-	edge_33	52276	51076	52276	1200	1200	60	NM:i:0	ms:i:2400	AS:i:2400	nn:i:0	tp:A:P	cm:i:227	s1:i:1185	s2:i:0	de:f:0	rl:i:0	cg:Z:1200M
+sim_link_edge25_to_edge33_reverse_side	2000	0	800	-	edge_25	2037	0	800	800	800	60	NM:i:0	ms:i:1600	AS:i:1600	nn:i:0	tp:A:P	cm:i:152	s1:i:788	s2:i:0	de:f:0	rl:i:0	cg:Z:800M
+sim_path_edge8_edge11_edge33	10252	500	8752	+	edge_11	8252	0	8252	8252	8252	60	NM:i:0	ms:i:16504	AS:i:16504	nn:i:0	tp:A:P	cm:i:1560	s1:i:8242	s2:i:380	de:f:0	rl:i:0	cg:Z:8252M
+sim_path_edge8_edge11_edge33	10252	8752	10252	+	edge_33	52276	0	1500	1500	1500	60	NM:i:0	ms:i:3000	AS:i:3000	nn:i:0	tp:A:P	cm:i:285	s1:i:1493	s2:i:0	de:f:0	rl:i:0	cg:Z:1500M
+sim_path_edge8_edge11_edge33	10252	0	500	+	edge_8	1626	1126	1626	500	500	60	NM:i:0	ms:i:1000	AS:i:1000	nn:i:0	tp:A:P	cm:i:92	s1:i:495	s2:i:0	de:f:0	rl:i:0	cg:Z:500M
+sim_edge33_long_5001_25000	20000	0	20000	+	edge_33	52276	5000	25000	20000	20000	60	NM:i:0	ms:i:40000	AS:i:40000	nn:i:0	tp:A:P	cm:i:3721	s1:i:19994	s2:i:76	de:f:0	rl:i:0	cg:Z:20000M

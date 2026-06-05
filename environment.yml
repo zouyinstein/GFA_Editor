@@ -1,0 +1,21 @@
+name: gfa-editor
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - fastapi
+  - uvicorn
+  - python-multipart
+  - httpx
+  - paramiko
+  - minimap2
+  - blast
+  - pip
+  - pip:
+      - "pyinstaller>=6,<7"
+      - "pywebview>=5,<6"
+      - "pyobjc-core>=10,<12; sys_platform == 'darwin'"
+      - "pyobjc-framework-Cocoa>=10,<12; sys_platform == 'darwin'"
+      - "pyobjc-framework-WebKit>=10,<12; sys_platform == 'darwin'"
+      - "pyobjc-framework-Quartz>=10,<12; sys_platform == 'darwin'"

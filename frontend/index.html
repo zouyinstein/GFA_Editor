@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GFA Editor v1.0</title>
+    <link rel="stylesheet" href="/styles.css?v=20260605-align5" />
+    <script src="/vendor/cytoscape.min.js"></script>
+    <script src="/vendor/d3.min.js"></script>
+    <script src="/vendor/lucide.min.js"></script>
+    <script src="/app.js?v=20260605-align5" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <h1>GFA Editor v1.0</h1>
+            <span id="source-name">No GFA loaded</span>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <label class="inline-select">
+            <span>Format</span>
+            <select id="export-format">
+              <option value="gfa">GFA</option>
+              <option value="fasta">FASTA</option>
+            </select>
+          </label>
+          <button id="undo-button" class="tool-button" type="button" title="Undo" disabled>
+            <i data-lucide="undo-2"></i><span>Undo</span>
+          </button>
+          <button id="redo-button" class="tool-button" type="button" title="Redo" disabled>
+            <i data-lucide="redo-2"></i><span>Redo</span>
+          </button>
+          <button id="export-button" class="primary-button" type="button" title="Export GFA" disabled>
+            <i data-lucide="download"></i><span>Export</span>
+          </button>
+          <button id="export-selected-button" class="tool-button" type="button" title="Export selected links" disabled>
+            <i data-lucide="download"></i><span>Selected</span>
+          </button>
+          <button id="export-history-button" class="tool-button" type="button" title="Export edit history JSON" disabled>
+            <i data-lucide="file-clock"></i><span>History</span>
+          </button>
+        </div>
+      </header>
+
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>Stats</h2>
+          <div id="stats-grid" class="stats-grid"></div>
+          <svg id="depth-histogram" class="histogram" role="img" aria-label="Depth histogram"></svg>
+        </section>
+
+        <section class="panel">
+          <h2>Import</h2>
+          <form id="gfa-upload-form" class="stack">
+            <label class="file-picker">
+              <input id="gfa-file" type="file" accept=".gfa,.txt" required />
+              <i data-lucide="file-up"></i>
+              <span id="gfa-file-label">Choose GFA</span>
+            </label>
+            <label class="check-row">
+              <input id="keep-sequences" type="checkbox" checked />
+              <span>Keep sequences for GFA/FASTA export</span>
+            </label>
+            <button class="primary-button full" type="submit">
+              <i data-lucide="upload"></i><span>Load graph</span>
+            </button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h2>Graph Drawing</h2>
+          <div class="stack">
+            <label class="field">
+              <span>Scope</span>
+              <select id="draw-scope">
+                <option value="entire">Entire graph</option>
+                <option value="visible">Visible/filter result</option>
+                <option value="selection">Selected neighborhood</option>
+              </select>
+            </label>
+            <label class="check-row">
+              <input id="auto-redraw" type="checkbox" />
+              <span>Redraw after edits</span>
+            </label>
+            <button id="draw-graph-button" class="primary-button full" type="button" disabled>
+              <i data-lucide="refresh-cw"></i><span>Draw graph</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Server Files</h2>
+          <div class="stack">
+            <div class="subsection">
+              <h3>SFTP</h3>
+              <div class="field-grid">
+                <label class="field">
+                  <span>Host</span>
+                  <input id="sftp-host" type="text" placeholder="192.168.1.10" />
+                </label>
+                <label class="field compact-field">
+                  <span>Port</span>
+                  <input id="sftp-port" type="number" min="1" max="65535" value="22" />
+                </label>
+              </div>
+              <div class="field-grid">
+                <label class="field">
+                  <span>Username</span>
+                  <input id="sftp-username" type="text" autocomplete="username" />
+                </label>
+                <label class="field">
+                  <span>Password</span>
+                  <input id="sftp-password" type="password" autocomplete="current-password" />
+                </label>
+              </div>
+              <label class="field">
+                <span>Remote path</span>
+                <input id="sftp-remote-path" type="text" placeholder="/data/sample.gfa" />
+              </label>
+              <div class="button-row">
+                <button id="sftp-download-button" class="tool-button" type="button">
+                  <i data-lucide="download-cloud"></i><span>Download</span>
+                </button>
+                <button id="sftp-upload-button" class="tool-button" type="button" disabled>
+                  <i data-lucide="upload-cloud"></i><span>Upload</span>
+                </button>
+              </div>
+            </div>
+
+            <details class="subsection local-server-tools">
+              <summary>Local workspace files</summary>
+              <label class="field">
+                <span>Data directory</span>
+                <input id="server-data-dir" type="text" value="Not connected" readonly />
+              </label>
+              <label class="field">
+                <span>Server GFA</span>
+                <select id="server-file-select" disabled>
+                  <option value="">Refresh file list</option>
+                </select>
+              </label>
+              <div class="button-row">
+                <button id="server-refresh-button" class="tool-button" type="button">
+                  <i data-lucide="refresh-cw"></i><span>Refresh</span>
+                </button>
+                <button id="server-load-button" class="tool-button" type="button" disabled>
+                  <i data-lucide="folder-open"></i><span>Load</span>
+                </button>
+              </div>
+              <label class="field">
+                <span>Save as</span>
+                <input id="server-save-path" type="text" placeholder="edited.gfa" />
+              </label>
+              <button id="server-save-button" class="tool-button full" type="button" disabled>
+                <i data-lucide="save"></i><span>Save locally</span>
+              </button>
+            </details>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Filters</h2>
+          <div class="stack">
+            <label class="field">
+              <span>Node search</span>
+              <input id="node-search" type="search" placeholder="contig / reference" />
+            </label>
+            <div class="radio-row" role="radiogroup" aria-label="Match mode">
+              <label><input type="radio" name="match-mode" value="partial" checked /> Partial</label>
+              <label><input type="radio" name="match-mode" value="exact" /> Exact</label>
+            </div>
+            <button id="find-node-button" class="tool-button full" type="button" disabled>
+              <i data-lucide="search"></i><span>Find node(s)</span>
+            </button>
+            <label class="field">
+              <span>Min depth</span>
+              <input id="min-depth" type="number" value="0" min="0" step="1" />
+            </label>
+            <label class="field">
+              <span>Color by</span>
+              <select id="color-mode">
+                <option value="depth">Depth</option>
+                <option value="alignment">Alignment identity</option>
+                <option value="read_path">Long-read paths</option>
+                <option value="degree">Degree</option>
+                <option value="random">Random</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Graph Display</h2>
+          <div class="stack">
+            <label class="field">
+              <span>Zoom (%)</span>
+              <input id="zoom-level" type="number" min="5" max="500" step="5" value="100" />
+            </label>
+            <label class="field">
+              <span>Circle size</span>
+              <input id="node-size-scale" type="range" min="0.45" max="3" step="0.05" value="1" />
+            </label>
+            <label class="field">
+              <span>Contig width</span>
+              <input id="node-width" type="range" min="6" max="56" step="1" value="18" />
+            </label>
+            <label class="field">
+              <span>Link width</span>
+              <input id="link-width-scale" type="range" min="0.4" max="4" step="0.05" value="1" />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Labels</h2>
+          <div class="label-grid">
+            <label><input id="label-name" type="checkbox" checked /> Name</label>
+            <label><input id="label-length" type="checkbox" /> Length</label>
+            <label><input id="label-depth" type="checkbox" /> Depth</label>
+            <label><input id="label-blast" type="checkbox" /> Alignments</label>
+            <label><input id="show-link-labels" type="checkbox" checked /> Link label</label>
+          </div>
+          <label class="check-row label-outline-row">
+            <input id="text-outline" type="checkbox" checked />
+            <span>Text outline</span>
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2>Alignments</h2>
+          <form id="blast-upload-form" class="stack">
+            <label class="field">
+              <span>Tool</span>
+              <select id="alignment-tool">
+                <option value="minimap2">minimap2</option>
+                <option value="blastn">blastn</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Preset</span>
+              <select id="alignment-preset"></select>
+            </label>
+            <label class="field">
+              <span>Extra args</span>
+              <input id="alignment-extra-args" type="text" />
+            </label>
+            <label class="file-picker compact">
+              <input id="query-fasta-file" type="file" accept=".fa,.fasta,.fq,.fastq,.fna,.gz" />
+              <i data-lucide="file-search"></i>
+              <span id="query-fasta-file-label">Choose query FASTA/FASTQ</span>
+            </label>
+            <button id="alignment-run-button" class="primary-button full" type="button" disabled>
+              <i data-lucide="play"></i><span>Run alignment</span>
+            </button>
+            <label class="field">
+              <span>Read</span>
+              <select id="alignment-read-select" disabled>
+                <option value="__all__">All reads</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Import format</span>
+              <select id="alignment-result-format">
+                <option value="paf">PAF</option>
+                <option value="blast6">BLAST outfmt 6</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Map results to</span>
+              <select id="alignment-target-role">
+                <option value="subject">Subject/target contigs</option>
+                <option value="query">Query contigs</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Command</span>
+              <textarea id="alignment-command" rows="4" readonly></textarea>
+            </label>
+            <label class="file-picker compact">
+              <input id="blast-file" type="file" accept=".tsv,.txt,.blast,.paf" />
+              <i data-lucide="database-zap"></i>
+              <span id="blast-file-label">Choose alignment result</span>
+            </label>
+            <button id="blast-upload-button" class="tool-button full" type="submit" disabled>
+              <i data-lucide="layers"></i><span>Import alignments</span>
+            </button>
+          </form>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <div class="graph-toolbar">
+          <div class="segmented">
+            <button class="layout-button active" type="button" data-layout="cose">Cose</button>
+            <button class="layout-button" type="button" data-layout="bandage_native">Bandage_native</button>
+            <button class="layout-button" type="button" data-layout="twin">Twin</button>
+          </div>
+          <div class="graph-actions">
+            <button id="draw-graph-toolbar-button" class="icon-button" type="button" title="Draw graph" disabled>
+              <i data-lucide="refresh-cw"></i>
+            </button>
+            <button id="fit-button" class="icon-button" type="button" title="Fit" disabled>
+              <i data-lucide="scan"></i>
+            </button>
+            <button id="delete-selected-button" class="danger-button" type="button" title="Delete selection" disabled>
+              <i data-lucide="trash-2"></i><span>Delete</span>
+            </button>
+            <button id="duplicate-node-button" class="tool-button" type="button" title="Duplicate node and links" disabled>
+              <i data-lucide="copy-plus"></i><span>Duplicate</span>
+            </button>
+            <button id="merge-link-button" class="tool-button" type="button" title="Merge selected link or selected connected contigs" disabled>
+              <i data-lucide="combine"></i><span>Merge</span>
+            </button>
+            <button id="rotate-circular-button" class="tool-button" type="button" title="Rotate circular contig start" disabled>
+              <i data-lucide="rotate-cw"></i><span>Rotate</span>
+            </button>
+            <button id="repeat-resolution-a-button" class="tool-button" type="button" title="Repeat resolution A" disabled>
+              <i data-lucide="git-branch"></i><span>Repeat A</span>
+            </button>
+            <button id="repeat-resolution-b-button" class="tool-button" type="button" title="Repeat resolution B" disabled>
+              <i data-lucide="git-branch"></i><span>Repeat B</span>
+            </button>
+          </div>
+        </div>
+        <div id="graph" class="graph">
+          <div id="cy-layer" class="cy-layer"></div>
+          <svg id="bandage-svg" class="bandage-svg" aria-label="Bandage SVG graph"></svg>
+          <div id="empty-state" class="empty-state">
+            <strong>GFA graph</strong>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span id="visible-count">0 nodes / 0 links</span>
+          <span id="status-text">Ready</span>
+        </div>
+      </main>
+
+      <aside class="inspector">
+        <section class="panel fill">
+          <div class="panel-title-row">
+            <h2>Inspector</h2>
+            <span id="selection-kind" class="pill">none</span>
+          </div>
+          <div id="selection-details" class="details"></div>
+        </section>
+        <section class="panel history-panel">
+          <div class="panel-title-row">
+            <h2>Operation Log</h2>
+            <button id="clear-history-button" class="mini-button" type="button" disabled>Clear</button>
+          </div>
+          <div id="history-list" class="history-list"></div>
+        </section>
+        <section class="panel">
+          <h2>Edit History</h2>
+          <div class="stack">
+            <label class="file-picker compact">
+              <input id="history-file" type="file" accept=".json,application/json" />
+              <i data-lucide="file-clock"></i>
+              <span id="history-file-label">Choose history JSON</span>
+            </label>
+            <button id="apply-history-button" class="tool-button full" type="button" disabled>
+              <i data-lucide="history"></i><span>Apply history</span>
+            </button>
+            <label class="file-picker compact">
+              <input id="render-gfa-file" type="file" accept=".gfa,.txt" />
+              <i data-lucide="file-up"></i>
+              <span id="render-gfa-file-label">Input GFA</span>
+            </label>
+            <label class="file-picker compact">
+              <input id="render-history-file" type="file" accept=".json,application/json" />
+              <i data-lucide="file-clock"></i>
+              <span id="render-history-file-label">Input history JSON</span>
+            </label>
+            <button id="render-history-button" class="tool-button full" type="button" disabled>
+              <i data-lucide="file-output"></i><span>Render edited GFA</span>
+            </button>
+            <label class="file-picker compact">
+              <input id="infer-old-gfa-file" type="file" accept=".gfa,.txt" />
+              <i data-lucide="file-input"></i>
+              <span id="infer-old-gfa-file-label">Old GFA</span>
+            </label>
+            <label class="file-picker compact">
+              <input id="infer-new-gfa-file" type="file" accept=".gfa,.txt" />
+              <i data-lucide="file-output"></i>
+              <span id="infer-new-gfa-file-label">New GFA</span>
+            </label>
+            <button id="infer-history-button" class="tool-button full" type="button" disabled>
+              <i data-lucide="list-tree"></i><span>Infer history</span>
+            </button>
+          </div>
+        </section>
+      </aside>
+    </div>
+    <div id="toast" class="toast" hidden></div>
+  </body>
+</html>
