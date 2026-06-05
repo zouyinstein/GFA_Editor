@@ -8,6 +8,7 @@ from .gfa_core import (
     GfaGraph,
     delete_edge,
     delete_node,
+    delete_selection,
     duplicate_node,
     merge_link,
     merge_selection,
@@ -43,6 +44,11 @@ def history_step_from_event(action: str, details: Dict[str, Any]) -> Optional[Di
         params = {"node_id": details.get("node_id")}
     elif action == "delete_edge":
         params = {"edge_id": details.get("edge_id")}
+    elif action == "delete_selection":
+        params = {
+            "node_ids": details.get("node_ids") or [],
+            "edge_ids": details.get("edge_ids") or [],
+        }
     elif action == "duplicate_node":
         params = {
             "node_id": details.get("source_node_id") or details.get("node_id"),
@@ -116,6 +122,8 @@ def _apply_history_step(graph: GfaGraph, action: str, params: Dict[str, Any]) ->
         return delete_node(graph, str(params["node_id"]))
     if action == "delete_edge":
         return delete_edge(graph, str(params["edge_id"]))
+    if action == "delete_selection":
+        return delete_selection(graph, params.get("node_ids") or [], params.get("edge_ids") or [])
     if action == "duplicate_node":
         return duplicate_node(graph, str(params["node_id"]), params.get("new_id"))
     if action == "update_node":

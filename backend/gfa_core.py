@@ -448,6 +448,45 @@ def delete_edge(graph: GfaGraph, edge_id: str) -> Dict[str, Any]:
     return {"edge_id": edge_id}
 
 
+def delete_selection(
+    graph: GfaGraph,
+    node_ids: Iterable[str],
+    edge_ids: Iterable[str],
+) -> Dict[str, Any]:
+    selected_node_ids = _unique_nonempty_ids(node_ids)
+    selected_edge_ids = _unique_nonempty_ids(edge_ids)
+    if not selected_node_ids and not selected_edge_ids:
+        raise ValueError("Select one or more contigs or links to delete")
+
+    missing_node_ids = [node_id for node_id in selected_node_ids if node_id not in graph.segments]
+    if missing_node_ids:
+        raise KeyError(f"Node not found: {missing_node_ids[0]}")
+
+    link_by_id = {link.id: link for link in graph.links}
+    missing_edge_ids = [edge_id for edge_id in selected_edge_ids if edge_id not in link_by_id]
+    if missing_edge_ids:
+        raise KeyError(f"Link not found: {missing_edge_ids[0]}")
+
+    selected_nodes = set(selected_node_ids)
+    selected_edges = set(selected_edge_ids)
+    before_edges = len(graph.links)
+    for node_id in selected_node_ids:
+        del graph.segments[node_id]
+    graph.links = [
+        link
+        for link in graph.links
+        if link.id not in selected_edges
+        and link.source not in selected_nodes
+        and link.target not in selected_nodes
+    ]
+    return {
+        "node_ids": selected_node_ids,
+        "edge_ids": selected_edge_ids,
+        "removed_nodes": len(selected_node_ids),
+        "removed_edges": before_edges - len(graph.links),
+    }
+
+
 def update_node(
     graph: GfaGraph,
     node_id: str,

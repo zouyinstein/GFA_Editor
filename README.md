@@ -1,4 +1,4 @@
-# GFA Editor v1.0
+# GFA Editor v1.1
 
 Bandage-style GFA graph viewer and editor for local use. It supports graph drawing, basic GFA editing, GFA/FASTA export, read/alignment visualization, and local file management.
 
@@ -35,6 +35,31 @@ Use another port when `8000` is busy:
 
 ```bash
 GFA_EDITOR_PORT=8010 scripts/start_local.sh
+```
+
+If startup says the port is already in use but `/api/health` does not answer, first try stopping a GFA Editor server on that port:
+
+```bash
+scripts/stop_local.sh
+```
+
+For a custom port, pass the same port to the stop script:
+
+```bash
+GFA_EDITOR_PORT=8010 scripts/stop_local.sh
+```
+
+If the port is still occupied by another local process, find and stop it manually:
+
+```bash
+lsof -nP -iTCP:8000 -sTCP:LISTEN
+kill <PID>
+```
+
+Replace `8000` with your port. If you do not want to stop that process, start GFA Editor on a free port instead:
+
+```bash
+GFA_EDITOR_PORT=8011 scripts/start_local.sh
 ```
 
 ## Conda

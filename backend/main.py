@@ -24,6 +24,7 @@ from .gfa_core import (
     attach_blast_hits,
     delete_edge,
     delete_node,
+    delete_selection,
     duplicate_node,
     export_fasta,
     export_gfa,
@@ -638,6 +639,11 @@ class MergeSelectionRequest(BaseModel):
     edge_ids: Optional[List[str]] = None
 
 
+class DeleteSelectionRequest(BaseModel):
+    node_ids: Optional[List[str]] = None
+    edge_ids: Optional[List[str]] = None
+
+
 class RotateCircularNodeRequest(BaseModel):
     node_id: str
     offset: int
@@ -697,7 +703,7 @@ class SftpTransferRequest(BaseModel):
 
 
 app = FastAPI(
-    title="GFA Editor v1.0",
+    title="GFA Editor v1.1",
     description="A local Bandage-style GFA graph editor.",
     version="1.0.0",
 )
@@ -864,6 +870,22 @@ def api_delete_edge(edge_id: str) -> Dict[str, Any]:
 @app.post("/api/delete_edge")
 def api_delete_edge_json(payload: EdgeRequest) -> Dict[str, Any]:
     return api_delete_edge(payload.edge_id)
+
+
+@app.post("/api/delete_selection")
+def api_delete_selection(payload: DeleteSelectionRequest) -> Dict[str, Any]:
+    node_ids = payload.node_ids or []
+    edge_ids = payload.edge_ids or []
+    try:
+        return session.mutate(
+            "delete_selection",
+            {"node_ids": node_ids, "edge_ids": edge_ids},
+            lambda graph: delete_selection(graph, node_ids, edge_ids),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/merge_link")

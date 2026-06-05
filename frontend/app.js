@@ -220,6 +220,9 @@ function cacheDom() {
     "gfa-file-label",
     "keep-sequences",
     "export-format",
+    "export-menu-toggle",
+    "export-menu-panel",
+    "quick-export-button",
     "history-file",
     "history-file-label",
     "apply-history-button",
@@ -264,6 +267,14 @@ function cacheDom() {
     "draw-scope",
     "draw-graph-button",
     "draw-graph-toolbar-button",
+    "graph-drawing-toggle",
+    "graph-drawing-panel",
+    "graph-display-toggle",
+    "graph-display-panel",
+    "graph-filter-toggle",
+    "graph-filter-panel",
+    "server-files-toggle",
+    "server-files-panel",
     "undo-button",
     "redo-button",
     "export-button",
@@ -271,6 +282,7 @@ function cacheDom() {
     "export-history-button",
     "fit-button",
     "delete-selected-button",
+    "delete-all-selected-button",
     "duplicate-node-button",
     "merge-link-button",
     "rotate-circular-button",
@@ -411,7 +423,7 @@ function bindEvents() {
     updateAlignmentButtons();
   });
   dom.queryFastaFile.addEventListener("change", () => {
-    dom.queryFastaFileLabel.textContent = dom.queryFastaFile.files[0]?.name || "Choose query FASTA/FASTQ";
+    dom.queryFastaFileLabel.textContent = dom.queryFastaFile.files[0]?.name || "Choose query";
     updateAlignmentCommandPreview();
     updateAlignmentButtons();
   });
@@ -484,6 +496,12 @@ function bindEvents() {
   dom.undoButton.addEventListener("click", () => postAction("/api/undo", "Undo complete"));
   dom.redoButton.addEventListener("click", () => postAction("/api/redo", "Redo complete"));
   dom.clearHistoryButton.addEventListener("click", clearOperationHistory);
+  dom.quickExportButton.addEventListener("click", quickDownloadExport);
+  dom.exportMenuToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleExportMenuPanel();
+  });
+  dom.exportMenuPanel.addEventListener("click", (event) => event.stopPropagation());
   dom.exportButton.addEventListener("click", downloadExport);
   dom.exportSelectedButton.addEventListener("click", downloadSelectedExport);
   dom.exportHistoryButton.addEventListener("click", downloadEditHistory);
@@ -502,7 +520,44 @@ function bindEvents() {
   });
   dom.drawGraphButton.addEventListener("click", drawGraphManually);
   dom.drawGraphToolbarButton.addEventListener("click", drawGraphManually);
+  dom.graphDrawingToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleGraphDrawingPanel();
+  });
+  dom.graphDrawingPanel.addEventListener("click", (event) => event.stopPropagation());
+  dom.graphDisplayToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleGraphDisplayPanel();
+  });
+  dom.graphDisplayPanel.addEventListener("click", (event) => event.stopPropagation());
+  dom.graphFilterToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleGraphFilterPanel();
+  });
+  dom.graphFilterPanel.addEventListener("click", (event) => event.stopPropagation());
+  dom.serverFilesToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleServerFilesPanel();
+  });
+  dom.serverFilesPanel.addEventListener("click", (event) => event.stopPropagation());
+  document.addEventListener("click", () => {
+    toggleExportMenuPanel(false);
+    toggleGraphDrawingPanel(false);
+    toggleGraphDisplayPanel(false);
+    toggleGraphFilterPanel(false);
+    toggleServerFilesPanel(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      toggleExportMenuPanel(false);
+      toggleGraphDrawingPanel(false);
+      toggleGraphDisplayPanel(false);
+      toggleGraphFilterPanel(false);
+      toggleServerFilesPanel(false);
+    }
+  });
   dom.deleteSelectedButton.addEventListener("click", deleteSelected);
+  dom.deleteAllSelectedButton.addEventListener("click", deleteAllSelected);
   dom.duplicateNodeButton.addEventListener("click", duplicateSelectedNode);
   dom.mergeLinkButton.addEventListener("click", mergeSelectedLink);
   dom.rotateCircularButton.addEventListener("click", rotateSelectedCircularStart);
@@ -550,6 +605,64 @@ function bindEvents() {
   });
 }
 
+function toggleExportMenuPanel(force) {
+  const opened = toggleToolbarPanel(dom.exportMenuPanel, dom.exportMenuToggle, force);
+  if (opened) {
+    toggleGraphDrawingPanel(false);
+    toggleGraphDisplayPanel(false);
+    toggleGraphFilterPanel(false);
+    toggleServerFilesPanel(false);
+  }
+}
+
+function toggleGraphDrawingPanel(force) {
+  const opened = toggleToolbarPanel(dom.graphDrawingPanel, dom.graphDrawingToggle, force);
+  if (opened) {
+    toggleExportMenuPanel(false);
+    toggleGraphDisplayPanel(false);
+    toggleGraphFilterPanel(false);
+    toggleServerFilesPanel(false);
+  }
+}
+
+function toggleGraphDisplayPanel(force) {
+  const opened = toggleToolbarPanel(dom.graphDisplayPanel, dom.graphDisplayToggle, force);
+  if (opened) {
+    toggleExportMenuPanel(false);
+    toggleGraphDrawingPanel(false);
+    toggleGraphFilterPanel(false);
+    toggleServerFilesPanel(false);
+  }
+}
+
+function toggleGraphFilterPanel(force) {
+  const opened = toggleToolbarPanel(dom.graphFilterPanel, dom.graphFilterToggle, force);
+  if (opened) {
+    toggleExportMenuPanel(false);
+    toggleGraphDrawingPanel(false);
+    toggleGraphDisplayPanel(false);
+    toggleServerFilesPanel(false);
+  }
+}
+
+function toggleServerFilesPanel(force) {
+  const opened = toggleToolbarPanel(dom.serverFilesPanel, dom.serverFilesToggle, force);
+  if (opened) {
+    toggleExportMenuPanel(false);
+    toggleGraphDrawingPanel(false);
+    toggleGraphDisplayPanel(false);
+    toggleGraphFilterPanel(false);
+  }
+}
+
+function toggleToolbarPanel(panel, toggle, force) {
+  if (!panel || !toggle) return;
+  const nextOpen = typeof force === "boolean" ? force : panel.hidden;
+  panel.hidden = !nextOpen;
+  toggle.setAttribute("aria-expanded", String(nextOpen));
+  return nextOpen;
+}
+
 async function postAction(path, success) {
   await callAndRender(path, {
     method: "POST",
@@ -572,16 +685,55 @@ async function downloadExport() {
     if (!response.ok) {
       throw new Error(await readError(response));
     }
-    const blob = await response.blob();
+    const text = await response.text();
     const disposition = response.headers.get("Content-Disposition") || "";
     const match = disposition.match(/filename="([^"]+)"/);
     const filename = match?.[1] || `edited.${format === "fasta" ? "fasta" : "gfa"}`;
-    downloadBlob(blob, filename);
+    const saved = await saveTextExport(text, filename, "text/plain");
+    if (saved.canceled) {
+      setStatus("Export canceled");
+      return;
+    }
     showToast(`${format.toUpperCase()} exported`);
     setStatus("Ready");
   } catch (error) {
     pendingRename = null;
     pendingDuplicateSource = null;
+    setStatus(error.message);
+    showToast(error.message);
+  }
+}
+
+async function quickDownloadExport() {
+  if (!graphState) return;
+  const format = dom.exportFormat.value;
+  try {
+    setStatus(`Exporting ${format.toUpperCase()}...`);
+    const response = await fetch(`/api/export?format=${encodeURIComponent(format)}`);
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const text = await response.text();
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match?.[1] || `edited.${format === "fasta" ? "fasta" : "gfa"}`;
+    const desktopApi = window.pywebview?.api;
+    if (desktopApi && typeof desktopApi.save_text_file_default === "function") {
+      const result = await desktopApi.save_text_file_default({
+        filename,
+        contents: text,
+      });
+      if (!result?.ok) {
+        throw new Error(result?.message || "Save failed");
+      }
+      showToast(`${format.toUpperCase()} exported`);
+      setStatus(result.path ? `Saved to ${result.path}` : "Ready");
+      return;
+    }
+    downloadBlob(new Blob([text], { type: "text/plain" }), filename);
+    showToast(`${format.toUpperCase()} exported`);
+    setStatus("Ready");
+  } catch (error) {
     setStatus(error.message);
     showToast(error.message);
   }
@@ -606,12 +758,16 @@ async function downloadSelectedExport() {
     if (!response.ok) {
       throw new Error(await readError(response));
     }
-    const blob = await response.blob();
+    const text = await response.text();
     const disposition = response.headers.get("Content-Disposition") || "";
     const match = disposition.match(/filename="([^"]+)"/);
     const extension = format === "fasta" ? "fasta" : "gfa";
     const filename = match?.[1] || `selected-links.${extension}`;
-    downloadBlob(blob, filename);
+    const saved = await saveTextExport(text, filename, "text/plain");
+    if (saved.canceled) {
+      setStatus("Export canceled");
+      return;
+    }
     showToast(`Selected links exported (${edgeIds.length})`);
     setStatus("Ready");
   } catch (error) {
@@ -631,8 +787,15 @@ async function downloadEditHistory() {
     const payload = await response.json();
     const sourceName = graphState.session?.source_name || "edited";
     const stem = fileStem(sourceName, "edited");
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    downloadBlob(blob, `${stem}.edit-history.json`);
+    const saved = await saveTextExport(
+      JSON.stringify(payload, null, 2),
+      `${stem}.edit-history.json`,
+      "application/json",
+    );
+    if (saved.canceled) {
+      setStatus("Export canceled");
+      return;
+    }
     showToast("Edit history exported");
     setStatus("Ready");
   } catch (error) {
@@ -671,8 +834,16 @@ async function renderHistoryFromFiles() {
     if (!response.ok) {
       throw new Error(await readError(response));
     }
-    const blob = await response.blob();
-    downloadBlob(blob, `${fileStem(gfaFile.name, "edited")}.history-rendered.gfa`);
+    const text = await response.text();
+    const saved = await saveTextExport(
+      text,
+      `${fileStem(gfaFile.name, "edited")}.history-rendered.gfa`,
+      "text/plain",
+    );
+    if (saved.canceled) {
+      setStatus("Export canceled");
+      return;
+    }
     showToast("Edited GFA rendered");
     setStatus("Ready");
   } catch (error) {
@@ -699,8 +870,15 @@ async function inferHistoryFromFiles() {
       throw new Error(await readError(response));
     }
     const payload = await response.json();
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    downloadBlob(blob, `${fileStem(oldFile.name, "old")}.inferred-history.json`);
+    const saved = await saveTextExport(
+      JSON.stringify(payload, null, 2),
+      `${fileStem(oldFile.name, "old")}.inferred-history.json`,
+      "application/json",
+    );
+    if (saved.canceled) {
+      setStatus("Export canceled");
+      return;
+    }
     showToast("Inferred edit history generated");
     setStatus("Ready");
   } catch (error) {
@@ -776,6 +954,68 @@ async function jumpToEditStep(targetStepCount, label) {
     { target_step_count: targetStepCount },
     label,
   );
+}
+
+async function saveTextExport(text, filename, mimeType = "text/plain") {
+  const desktopApi = window.pywebview?.api;
+  if (desktopApi && typeof desktopApi.save_text_file === "function") {
+    const result = await desktopApi.save_text_file({
+      filename,
+      contents: text,
+      file_types: fileTypesForFilename(filename),
+    });
+    if (!result?.ok) {
+      throw new Error(result?.message || "Save failed");
+    }
+    return result;
+  }
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: browserFileTypesForFilename(filename, mimeType),
+      });
+      const writable = await handle.createWritable();
+      await writable.write(new Blob([text], { type: mimeType }));
+      await writable.close();
+      return { ok: true, canceled: false, path: handle.name };
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        return { ok: true, canceled: true };
+      }
+      throw new Error(error?.message || "Save failed");
+    }
+  }
+  const fallbackName = window.prompt("Save as", filename);
+  if (fallbackName == null) {
+    return { ok: true, canceled: true };
+  }
+  downloadBlob(new Blob([text], { type: mimeType }), fallbackName.trim() || filename);
+  return { ok: true, downloaded: true, canceled: false };
+}
+
+function browserFileTypesForFilename(filename, mimeType) {
+  const extension = String(filename || "").toLowerCase().split(".").pop();
+  if (extension === "gfa") {
+    return [{ description: "GFA files", accept: { "text/plain": [".gfa"] } }];
+  }
+  if (extension === "fasta" || extension === "fa") {
+    return [{ description: "FASTA files", accept: { "text/plain": [".fasta", ".fa"] } }];
+  }
+  if (extension === "json") {
+    return [{ description: "JSON files", accept: { "application/json": [".json"] } }];
+  }
+  return [{ description: "Text files", accept: { [mimeType || "text/plain"]: [".txt"] } }];
+}
+
+function fileTypesForFilename(filename) {
+  const extension = String(filename || "").toLowerCase().split(".").pop();
+  if (extension === "gfa") return ["GFA files (*.gfa)", "All files (*.*)"];
+  if (extension === "fasta" || extension === "fa") {
+    return ["FASTA files (*.fasta;*.fa)", "All files (*.*)"];
+  }
+  if (extension === "json") return ["JSON files (*.json)", "All files (*.*)"];
+  return ["Text files (*.txt)", "All files (*.*)"];
 }
 
 function downloadBlob(blob, filename) {
@@ -1030,6 +1270,17 @@ async function deleteSelected() {
   } else {
     await postJsonAction("/api/delete_edge", { edge_id: selected.id }, "Link deleted");
   }
+}
+
+async function deleteAllSelected() {
+  const selection = getSelectedGraphSelection();
+  const itemCount = selection.nodeIds.length + selection.edgeIds.length;
+  if (!itemCount) return;
+  await postJsonAction(
+    "/api/delete_selection",
+    { node_ids: selection.nodeIds, edge_ids: selection.edgeIds },
+    itemCount === 1 ? "Selected item deleted" : `${itemCount} selected items deleted`,
+  );
 }
 
 async function duplicateSelectedNode() {
@@ -1700,13 +1951,16 @@ function updateSelection() {
 
 function updateSelectionButtons(selected) {
   const hasGraph = Boolean(graphState);
+  const selection = getSelectedGraphSelection();
+  const selectedCount = selection.nodeIds.length + selection.edgeIds.length;
   const isNode =
     selected &&
     (typeof selected.isNode === "function" ? selected.isNode() : selected.kind === "node");
   dom.deleteSelectedButton.disabled = !hasGraph || !selected;
+  dom.deleteAllSelectedButton.disabled = !hasGraph || !selectedCount;
   dom.duplicateNodeButton.disabled = !hasGraph || !selected || !isNode;
   dom.mergeLinkButton.disabled = !canMergeCurrentSelection();
-  dom.exportSelectedButton.disabled = !hasGraph || !getSelectedGraphSelection().edgeIds.length;
+  dom.exportSelectedButton.disabled = !hasGraph || !selection.edgeIds.length;
   dom.rotateCircularButton.disabled = !hasGraph || !selected || !isNode;
   updateRepeatResolutionButtons();
 }
@@ -1872,9 +2126,11 @@ function updateGlobalButtons(session) {
   dom.undoButton.disabled = !session?.can_undo;
   dom.redoButton.disabled = !session?.can_redo;
   dom.exportButton.disabled = !hasGraph;
+  dom.quickExportButton.disabled = !hasGraph;
   dom.exportSelectedButton.disabled = true;
   dom.exportHistoryButton.disabled = !hasGraph;
   dom.fitButton.disabled = !hasGraph;
+  dom.deleteAllSelectedButton.disabled = true;
   dom.findNodeButton.disabled = !hasGraph;
   dom.drawGraphButton.disabled = !hasGraph;
   dom.drawGraphToolbarButton.disabled = !hasGraph;
@@ -4599,7 +4855,7 @@ function nodeEditForm(data) {
   form.appendChild(editTitle("Edit contig"));
   const grid = document.createElement("div");
   grid.className = "edit-grid";
-  const nameInput = appendField(grid, "Name", "text", data.id, "full-field");
+  const nameInput = appendField(grid, "Name", "text", data.id);
   const labelInput = appendField(grid, "Label", "text", data.customLabel || "");
   const colorInput = appendField(grid, "Colour", "color", data.customColor || rgbToHex(data.renderColor));
   const depthInput = appendField(grid, "Depth", "number", data.depth ?? "");
@@ -4783,8 +5039,8 @@ function renderHistogram(histogram) {
   const svg = d3.select(dom.depthHistogram);
   svg.selectAll("*").remove();
   const width = dom.depthHistogram.clientWidth || 260;
-  const height = 150;
-  const margin = { top: 10, right: 8, bottom: 28, left: 34 };
+  const height = dom.depthHistogram.clientHeight || 76;
+  const margin = { top: 6, right: 6, bottom: 18, left: 26 };
   svg.attr("viewBox", `0 0 ${width} ${height}`);
 
   if (!histogram.length) {
@@ -4794,7 +5050,7 @@ function renderHistogram(histogram) {
       .attr("y", height / 2)
       .attr("text-anchor", "middle")
       .attr("fill", "#8c9488")
-      .attr("font-size", 12)
+      .attr("font-size", 11)
       .text("No depth");
     return;
   }
@@ -4828,7 +5084,7 @@ function renderHistogram(histogram) {
     .call(d3.axisBottom(x).ticks(4))
     .call((g) => g.select(".domain").attr("stroke", "#cfd7c8"))
     .call((g) => g.selectAll("line").attr("stroke", "#cfd7c8"))
-    .call((g) => g.selectAll("text").attr("fill", "#667064").attr("font-size", 11));
+    .call((g) => g.selectAll("text").attr("fill", "#667064").attr("font-size", 10));
 
   svg
     .append("g")
@@ -4836,7 +5092,7 @@ function renderHistogram(histogram) {
     .call(d3.axisLeft(y).ticks(3))
     .call((g) => g.select(".domain").attr("stroke", "#cfd7c8"))
     .call((g) => g.selectAll("line").attr("stroke", "#cfd7c8"))
-    .call((g) => g.selectAll("text").attr("fill", "#667064").attr("font-size", 11));
+    .call((g) => g.selectAll("text").attr("fill", "#667064").attr("font-size", 10));
 }
 
 function renderHistory(session) {

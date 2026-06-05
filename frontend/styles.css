@@ -101,11 +101,19 @@ h2 {
   font-size: 12px;
 }
 
-.topbar-actions,
 .graph-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.export-menu .display-popover {
+  right: 0;
+  left: auto;
+}
+
+.export-popover {
+  width: 260px;
 }
 
 .inline-select {
@@ -128,7 +136,7 @@ h2 {
 .sidebar,
 .inspector {
   overflow: auto;
-  padding: 14px;
+  padding: 12px;
   min-width: 0;
 }
 
@@ -161,6 +169,10 @@ h2 {
 
 .panel.fill {
   min-height: 330px;
+}
+
+.inspector .panel.fill {
+  min-height: 150px;
 }
 
 .panel-toggle {
@@ -222,6 +234,10 @@ h2 {
   min-width: 0;
 }
 
+.compact-stack {
+  gap: 8px;
+}
+
 .file-picker {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
@@ -238,6 +254,32 @@ h2 {
 
 .file-picker.compact {
   min-height: 38px;
+}
+
+.inline-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inline-picker {
+  min-height: 36px;
+}
+
+.inline-field {
+  min-width: 0;
+}
+
+.no-field-label > span {
+  display: none;
+}
+
+.compact-action {
+  min-width: 74px;
+  min-height: 36px;
+  padding: 0 10px;
 }
 
 .file-picker input {
@@ -278,6 +320,10 @@ h2 {
   grid-template-columns: minmax(0, 1fr) minmax(72px, 0.34fr);
   gap: 8px;
   min-width: 0;
+}
+
+.even-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .radio-row label,
@@ -432,12 +478,127 @@ button svg,
 .graph-toolbar {
   display: flex;
   flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 8px 12px;
-  padding: 10px 12px;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--line);
   background: #fbfcf8;
+}
+
+.graph-toolbar-left {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.graph-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.graph-export-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.graph-actions .tool-button,
+.graph-actions .danger-button,
+.graph-actions .icon-button {
+  width: 34px;
+  min-height: 32px;
+  padding: 0;
+}
+
+.graph-actions .tool-button span,
+.graph-actions .danger-button span {
+  display: none;
+}
+
+.graph-export-actions .quick-export-action {
+  width: 44px;
+  min-height: 36px;
+}
+
+.graph-export-actions .export-menu .compact-tool {
+  width: 44px;
+  min-width: 44px;
+  min-height: 36px;
+  padding: 0;
+}
+
+.compact-tool {
+  min-height: 32px;
+  padding: 0 9px;
+}
+
+.icon-only-tool {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+}
+
+.display-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.display-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 12;
+  display: grid;
+  gap: 10px;
+  width: 260px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.display-popover[hidden] {
+  display: none;
+}
+
+.filter-popover {
+  width: 320px;
+}
+
+.drawing-popover {
+  left: 0;
+  width: 300px;
+}
+
+.drawing-row {
+  align-items: stretch;
+}
+
+.drawing-row .drawing-scope-field select,
+.drawing-row .compact-action {
+  height: 38px;
+  min-height: 38px;
+}
+
+.drawing-row .compact-action {
+  align-self: end;
+}
+
+.server-popover {
+  width: 420px;
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+}
+
+.server-popover .subsection:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .segmented {
@@ -451,9 +612,9 @@ button svg,
 }
 
 .segmented button {
-  min-width: 68px;
-  min-height: 32px;
-  padding: 0 12px;
+  min-width: 56px;
+  min-height: 30px;
+  padding: 0 9px;
   color: var(--muted);
   background: transparent;
   cursor: pointer;
@@ -461,7 +622,7 @@ button svg,
 }
 
 .segmented button[data-layout="bandage_native"] {
-  min-width: 122px;
+  min-width: 56px;
 }
 
 .segmented button + button {
@@ -481,8 +642,8 @@ button svg,
   font-size: 13px;
 }
 
-.label-outline-row {
-  margin-top: 10px;
+.compact-label-grid {
+  gap: 7px 10px;
 }
 
 .graph {
@@ -641,11 +802,28 @@ button svg,
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
+}
+
+.stats-panel {
+  padding: 8px 10px;
+}
+
+.stats-panel .panel-toggle {
+  min-height: 18px;
+  margin-bottom: 8px;
+}
+
+.stats-panel .panel-toggle span {
+  font-size: 12px;
 }
 
 .stat {
-  padding: 9px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 7px;
   border-radius: 7px;
   background: var(--panel-soft);
   border: 1px solid #edf0e8;
@@ -653,21 +831,26 @@ button svg,
 
 .stat b {
   display: block;
-  font-size: 18px;
+  order: 2;
+  font-size: 16px;
   line-height: 1.2;
+  text-align: right;
 }
 
 .stat span {
   display: block;
   color: var(--muted);
-  font-size: 11px;
-  margin-top: 3px;
+  font-size: 10px;
+  margin-top: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .histogram {
   width: 100%;
-  height: 150px;
-  margin-top: 12px;
+  height: 76px;
+  margin-top: 6px;
   overflow: visible;
 }
 
@@ -691,15 +874,15 @@ button svg,
 
 .details {
   display: grid;
-  gap: 8px;
-  font-size: 13px;
+  gap: 5px;
+  font-size: 12px;
 }
 
 .detail-row {
   display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
-  gap: 8px;
-  padding: 8px 0;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 6px;
+  padding: 5px 0;
   border-bottom: 1px solid #edf0e8;
 }
 
@@ -713,16 +896,22 @@ button svg,
 
 .edit-form {
   display: grid;
-  gap: 10px;
-  margin-top: 12px;
-  padding-top: 12px;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: 1px solid #edf0e8;
+}
+
+.inspector .edit-form {
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 8px;
 }
 
 .edit-form h3 {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0;
 }
@@ -730,12 +919,22 @@ button svg,
 .edit-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 8px;
+  gap: 6px;
+}
+
+.edit-form .field {
+  gap: 3px;
+  font-size: 11px;
+}
+
+.edit-form .field input {
+  min-height: 30px;
+  padding: 0 8px;
 }
 
 .edit-form input[type="color"] {
   width: 100%;
-  min-height: 36px;
+  min-height: 30px;
   padding: 2px 4px;
 }
 
@@ -744,9 +943,12 @@ button svg,
 }
 
 .form-note {
-  color: var(--muted);
+  display: none;
+}
+
+.edit-form .primary-button {
+  min-height: 32px;
   font-size: 12px;
-  line-height: 1.35;
 }
 
 .hit-list {
@@ -776,6 +978,58 @@ button svg,
 .history-panel {
   max-height: 250px;
   overflow: auto;
+}
+
+.edit-history-panel {
+  padding: 10px;
+}
+
+.edit-history-panel .panel-toggle {
+  margin-bottom: 8px;
+}
+
+.edit-history-tools {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.edit-history-tools .file-picker,
+.edit-history-tools .tool-button {
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+.edit-history-tools .tool-button span,
+.edit-history-tools .file-picker span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.advanced-tools {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.advanced-tools summary {
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 1px solid #edf0e8;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--panel-soft);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.advanced-tools[open] summary {
+  margin-bottom: 8px;
 }
 
 .history-list {

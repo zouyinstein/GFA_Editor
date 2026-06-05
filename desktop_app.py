@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 import traceback
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 import webbrowser
@@ -97,10 +97,86 @@ def start_server(port: int):
     return server, thread
 
 
+class DesktopApi:
+    def __init__(self) -> None:
+        self.window = None
+
+    def bind_window(self, window) -> None:
+        self.window = window
+
+    def save_text_file(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if self.window is None:
+            return {"ok": False, "message": "Desktop window is not ready."}
+
+        try:
+            import webview
+
+            filename = str(payload.get("filename") or "export.txt")
+            contents = str(payload.get("contents") or "")
+            raw_file_types = payload.get("file_types") or []
+            file_types = tuple(str(item) for item in raw_file_types if str(item).strip())
+            selected = self.window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=filename,
+                file_types=file_types,
+            )
+            if not selected:
+                return {"ok": True, "canceled": True}
+            path = selected[0] if isinstance(selected, (list, tuple)) else selected
+            if not path:
+                return {"ok": True, "canceled": True}
+            target = Path(str(path)).expanduser()
+            target.write_text(contents, encoding="utf-8")
+            return {
+                "ok": True,
+                "canceled": False,
+                "path": str(target),
+                "bytes": len(contents.encode("utf-8")),
+            }
+        except Exception as exc:
+            return {"ok": False, "message": f"Save failed: {exc}"}
+
+    def save_text_file_default(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            filename = Path(str(payload.get("filename") or "export.txt")).name
+            if not filename:
+                filename = "export.txt"
+            contents = str(payload.get("contents") or "")
+            target_dir = Path.home() / "Downloads"
+            if not target_dir.exists():
+                target_dir = Path.cwd()
+            target = target_dir / filename
+            if target.exists():
+                stem = target.stem
+                suffix = target.suffix
+                counter = 1
+                while target.exists():
+                    target = target_dir / f"{stem}-{counter}{suffix}"
+                    counter += 1
+            target.write_text(contents, encoding="utf-8")
+            return {
+                "ok": True,
+                "canceled": False,
+                "path": str(target),
+                "bytes": len(contents.encode("utf-8")),
+            }
+        except Exception as exc:
+            return {"ok": False, "message": f"Save failed: {exc}"}
+
+
 def run_embedded_webview(url: str, server) -> None:
     import webview
 
-    window = webview.create_window("GFA Editor v1.0", url, width=1440, height=920, min_size=(1000, 680))
+    api = DesktopApi()
+    window = webview.create_window(
+        "GFA Editor v1.1",
+        url,
+        width=1440,
+        height=920,
+        min_size=(1000, 680),
+        js_api=api,
+    )
+    api.bind_window(window)
 
     def stop_server() -> None:
         server.should_exit = True
