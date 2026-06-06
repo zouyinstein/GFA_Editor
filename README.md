@@ -9,7 +9,7 @@ Data stays on the local machine unless a custom server directory or SFTP transfe
 Install the local environment:
 
 ```bash
-cd "/path/to/bandage重构"
+cd "/path/to/GFA_Editor"
 scripts/setup_local_dev.sh
 ```
 
