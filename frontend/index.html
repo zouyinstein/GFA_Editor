@@ -4,11 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GFA Editor v1.1</title>
-    <link rel="stylesheet" href="/styles.css?v=20260606-toolbar4" />
+    <link rel="stylesheet" href="/styles.css?v=20260606-layout-icons" />
     <script src="/vendor/cytoscape.min.js"></script>
     <script src="/vendor/d3.min.js"></script>
     <script src="/vendor/lucide.min.js"></script>
-    <script src="/app.js?v=20260606-toolbar4" defer></script>
+    <script src="/app.js?v=20260606-layout-icons" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -133,10 +133,39 @@
       <main class="workspace">
         <div class="graph-toolbar">
           <div class="graph-toolbar-left">
-            <div class="segmented">
-              <button class="layout-button active" type="button" data-layout="cose">Cose</button>
-              <button class="layout-button" type="button" data-layout="bandage_native" title="Bandage native">Band</button>
-              <button class="layout-button" type="button" data-layout="twin">Twin</button>
+            <div class="segmented layout-mode-group" aria-label="Visualization mode">
+              <button class="layout-button active" type="button" data-layout="cose" title="Cose view" aria-label="Cose view">
+                <svg class="layout-mode-icon" viewBox="0 0 28 28" aria-hidden="true" focusable="false">
+                  <path class="layout-mode-link" d="M8 10.5 14.5 6.5 21 12.5 17 21 7.5 18z" />
+                  <path class="layout-mode-link" d="M8 10.5 17 21M14.5 6.5 7.5 18" />
+                  <circle cx="8" cy="10.5" r="2.1" />
+                  <circle cx="14.5" cy="6.5" r="2.1" />
+                  <circle cx="21" cy="12.5" r="2.1" />
+                  <circle cx="17" cy="21" r="2.1" />
+                  <circle cx="7.5" cy="18" r="2.1" />
+                </svg>
+              </button>
+              <button class="layout-button" type="button" data-layout="bandage_native" title="Band view" aria-label="Band view">
+                <svg class="layout-mode-icon" viewBox="0 0 28 28" aria-hidden="true" focusable="false">
+                  <path class="layout-mode-band" d="M5.5 19.5 C8.5 8.5 15.5 7 22.5 11.5" />
+                  <path class="layout-mode-band" d="M7 20.5 C12.5 22.5 18.5 20.5 22.5 15" />
+                  <circle cx="5.5" cy="19.5" r="1.8" />
+                  <circle cx="22.5" cy="11.5" r="1.8" />
+                  <circle cx="22.5" cy="15" r="1.8" />
+                </svg>
+              </button>
+              <button class="layout-button" type="button" data-layout="twin" title="Twin view" aria-label="Twin view">
+                <svg class="layout-mode-icon" viewBox="0 0 28 28" aria-hidden="true" focusable="false">
+                  <path class="layout-mode-divider" d="M14 4.5v19" />
+                  <path class="layout-mode-link" d="M5.5 11 10 8.5 11.5 15.5 6.5 18.5z" />
+                  <circle cx="5.5" cy="11" r="1.55" />
+                  <circle cx="10" cy="8.5" r="1.55" />
+                  <circle cx="11.5" cy="15.5" r="1.55" />
+                  <circle cx="6.5" cy="18.5" r="1.55" />
+                  <path class="layout-mode-band" d="M18 19.5 C16.5 12 20 7.5 24 9.5" />
+                  <path class="layout-mode-band" d="M18.5 20 C22 22 24.5 18.5 23 14.5" />
+                </svg>
+              </button>
             </div>
             <div class="display-menu">
               <button

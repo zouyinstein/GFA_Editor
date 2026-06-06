@@ -621,8 +621,63 @@ button svg,
   white-space: nowrap;
 }
 
-.segmented button[data-layout="bandage_native"] {
-  min-width: 56px;
+.layout-mode-group {
+  flex-wrap: nowrap;
+}
+
+.layout-mode-group .layout-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  min-height: 34px;
+  padding: 0;
+}
+
+.layout-mode-icon {
+  width: 25px;
+  height: 25px;
+  color: currentColor;
+  overflow: visible;
+}
+
+.layout-mode-icon path,
+.layout-mode-icon circle {
+  vector-effect: non-scaling-stroke;
+}
+
+.layout-mode-icon circle {
+  fill: currentColor;
+  stroke: #fbfcf8;
+  stroke-width: 1.2;
+}
+
+.layout-mode-link,
+.layout-mode-divider {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.layout-mode-link {
+  stroke-width: 1.8;
+  opacity: 0.78;
+}
+
+.layout-mode-band {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.78;
+}
+
+.layout-mode-divider {
+  stroke-width: 1.35;
+  opacity: 0.45;
 }
 
 .segmented button + button {
