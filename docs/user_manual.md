@@ -1,83 +1,83 @@
-# GFA Editor v1.2 用户手册
+# GFA Editor v1.2 User Manual
 
-本文档说明 GFA Editor v1.2 中主要工具的用途和操作方式。GFA Editor 面向本地 GFA assembly graph 的查看、编辑、比对结果可视化和导出。
+This manual describes the main tools and workflows in GFA Editor v1.2. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
 
-## 1. 启动、停止和数据安全
+## 1. Start, Stop, and Data Safety
 
-启动本地浏览器版：
+Start the local browser version:
 
 ```bash
 scripts/start_local.sh
 ```
 
-打开：
+Open:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-停止：
+Stop:
 
 ```bash
 scripts/stop_local.sh
 ```
 
-如果 `8000` 端口被占用：
+If port `8000` is already in use:
 
 ```bash
 lsof -nP -iTCP:8000 -sTCP:LISTEN
 kill <PID>
 ```
 
-也可以不关闭已有进程，改用其他端口：
+You can also keep the existing process running and use another port:
 
 ```bash
 GFA_EDITOR_PORT=8010 scripts/start_local.sh
 ```
 
-GFA Editor 默认只在本机读写数据。只有当你明确使用 Files 中的服务器目录或 SFTP 功能时，才会与外部路径或远程服务器交互。
+By default, GFA Editor only reads and writes data on your local machine. It interacts with external paths or remote servers only when you explicitly use the Files server data directory or SFTP features.
 
-## 2. 界面结构
+## 2. Interface Layout
 
-顶部栏左侧显示 app 图标、`GFA Editor v1.2` 和当前文件名。顶部中间是可视化模式和工具按钮。顶部右侧是编辑和导出按钮。
+The top bar shows the app icon, `GFA Editor v1.2`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
 
-左侧面板包含 Stats、Import、Labels、Alignments。
+The left panel contains Stats, Import, Labels, and Alignments.
 
-中间是 graph workspace。右侧是 Inspector、Operation Log 和 Edit History。
+The center area is the graph workspace. The right side contains Inspector, Operation Log, and Edit History.
 
 ## 3. Import
 
-在 Import 面板中选择 `.gfa` 文件，然后点击 Load。
+Choose a `.gfa` file in the Import panel, then click Load.
 
-`Keep sequences for GFA/FASTA export` 用于保留 segment sequence。如果后续需要导出 FASTA 或带 sequence 的 GFA，建议保持勾选。只有在图很大且不需要 sequence 导出时才建议关闭。
+`Keep sequences for GFA/FASTA export` preserves segment sequences. Keep it enabled if you need FASTA export or GFA export with sequences. Disable it only for very large graphs when sequence export is not needed.
 
-也可以通过顶部 Files 按钮从本地 server data 目录或 SFTP 路径加载图文件。
+You can also load graph files from the local server data directory or an SFTP path through the Files button in the top toolbar.
 
-## 4. 三种可视化模式
+## 4. Visualization Modes
 
-Cose 是力导向布局，适合快速查看连接关系。
+Cose is a force-directed layout for quickly inspecting graph connectivity.
 
-Band 是 Bandage 风格布局，contig 以较粗的路径显示，link 以箭头连接。
+Band is a Bandage-style layout. Contigs are rendered as thick paths and links are rendered as directional arrows.
 
-Twin 会并排显示 Cose 和 Band，适合对比拓扑关系和路径形态。
+Twin shows Cose and Band side by side, which is useful for comparing topology and path shape.
 
-Fit 按钮会把当前可见图居中并适配窗口。
+The Fit button centers the current visible graph and fits it to the viewport.
 
-Draw 按钮用于重新绘图。Drawing 设置中可以选择绘图范围：
+The Draw button redraws the graph. Drawing settings can choose the redraw scope:
 
-- Entire graph：重绘整个图
-- Visible/filter result：只重绘当前可见或过滤后的图
-- Selected neighborhood：只重绘当前选择 contig 的邻域
+- Entire graph: redraw the whole graph.
+- Visible/filter result: redraw only the currently visible or filtered graph.
+- Selected neighborhood: redraw the neighborhood of the selected contig.
 
-`Redraw after edits` 会在编辑后自动重绘。
+`Redraw after edits` automatically redraws the graph after edits.
 
-## 5. Display、Filters、Labels、Files
+## 5. Display, Filters, Labels, and Files
 
-Display 用于调整 zoom、circle size、contig width 和 link width。
+Display adjusts zoom, circle size, contig width, and link width.
 
-Filters 用于搜索 contig、选择 partial/exact 匹配方式、设置最小 depth，以及选择颜色模式。颜色模式包括 depth、alignment identity、long-read paths、degree 和 random。
+Filters searches contigs, switches between partial and exact matching, sets minimum depth, and selects the color mode. Color modes include depth, alignment identity, long-read paths, degree, and random.
 
-Labels 用于控制显示哪些文字：
+Labels controls which text is shown:
 
 - Name
 - Length
@@ -86,170 +86,170 @@ Labels 用于控制显示哪些文字：
 - Link label
 - Text outline
 
-Files 包含本地 server data 和 SFTP 操作。可以刷新文件列表、加载 server GFA、保存当前图到 server data 目录、从 SFTP 下载、上传到 SFTP。
+Files contains local server data and SFTP actions. You can refresh the file list, load a server GFA file, save the current graph to the server data directory, download from SFTP, and upload to SFTP.
 
-## 6. 选择和 Inspector
+## 6. Selection and Inspector
 
-点击 contig 或 link 可以选择对象。不同视图下支持的多选方式和可用操作会根据当前选择自动启用或禁用。
+Click a contig or link to select it. Multi-selection support and available actions depend on the current view and selection.
 
-Inspector 会显示 ID、label、length、depth、degree、support、CIGAR、tags，以及可用的最佳 alignment 或 path 信息。
+Inspector shows ID, label, length, depth, degree, support, CIGAR, tags, and available best alignment or path information.
 
-Edit contig 可修改：
+Edit contig can modify:
 
 - Name
 - Label
 - Colour
 - Depth
 
-修改 Name 会重写 GFA 中的 `S` record，并同步更新相关 `L` record。
+Changing Name rewrites the GFA `S` record and updates related `L` records.
 
-Edit link 可修改：
+Edit link can modify:
 
 - Label
 - Colour
 - Support RC
 - CIGAR
 
-link 的 label 和 colour 会保存为 `LB:Z` 和 `CL:Z` tag。
+Link label and colour are saved as `LB:Z` and `CL:Z` tags.
 
-## 7. 编辑工具
+## 7. Editing Tools
 
-Undo 和 Redo 用于撤销或重做图编辑。
+Undo and Redo undo or redo graph edits.
 
-Delete 删除当前选择。
+Delete removes the current selection.
 
-Delete All Selected 删除所有选中的 contig 和 link。
+Delete All Selected removes all selected contigs and links.
 
-Duplicate 复制选中的 contig 以及相关 link。
+Duplicate copies the selected contig and related links.
 
-Merge 用于合并选中的 link，或合并一条已选择的连通路径。Cose 和 Band 视图中，merge 后只会调整被 merge 的 contig 和相关 link，未参与 merge 的 contig 和 link 会尽量保持原位置，减少整张图跳动。
+Merge merges the selected link, or merges a selected connected path. In Cose and Band views, merge adjusts only the merged contig and related links where possible. Unmerged contigs and links keep their previous positions as much as possible to reduce layout jumps.
 
-Rotate 用于调整 circular contig 的起点。
+Rotate changes the start position of a circular contig.
 
-Repeat A 和 Repeat B 用于 repeat resolution。通常先 Duplicate repeat contig，再使用 Repeat A/B 执行不同策略。
+Repeat A and Repeat B are repeat-resolution tools. A typical workflow is to duplicate the repeat contig first, then apply Repeat A or Repeat B depending on the desired strategy.
 
-Operation Log 记录近期操作。
+Operation Log records recent operations. Its before and after buttons restore operation-level graph states, including upload, alignment, and delete-selection states.
 
-Edit History 可以导出、导入、推断、渲染和回放编辑历史。
+Edit History can export, import, infer, render, and replay edit history.
 
 ## 8. Alignments
 
-Alignments 支持 `minimap2` 和 `blastn`。
+Alignments supports `minimap2` and `blastn`.
 
-运行 alignment：
+Run an alignment:
 
-1. 先加载 GFA。
-2. 选择 Tool。
-3. 选择 Preset。
-4. 选择 query FASTA/FASTQ。
-5. 点击 Run。
+1. Load a GFA file.
+2. Choose Tool.
+3. Choose Preset.
+4. Choose query FASTA/FASTQ.
+5. Click Run.
 
-Advanced 中可以设置 extra args、导入结果格式、结果映射方向、查看生成的命令，并导入已有 PAF 或 BLAST outfmt 6 文件。
+Advanced contains extra args, imported result format, result target role, generated command preview, and import of existing PAF or BLAST outfmt 6 files.
 
-Read 下拉框可以显示 All reads，也可以只查看单条 query/read。
+The Read selector can show All reads or a single query/read.
 
-比对颜色控制：
+Alignment color controls:
 
-- `Light hit background` 控制 alignment/read-path 颜色模式下是否允许显示命中 contig 的浅色背景。
-- Query colours 中每条 query 都有 `f`、`b` 和颜色选择器。
-- `f` 表示 foreground，控制该 query 的深色命中片段是否显示。
-- `b` 表示 background，控制该 query 是否参与浅色命中背景。
-- 单条 query 时，可以显示浅色命中 contig 背景，同时保留深色命中区段。
-- 取消单条 query 的 `b` 后，不显示浅色背景，只显示深色命中区段。
-- 多条 query 时，默认不显示每条 query 的浅色背景，深色命中区段按 query 使用不同颜色。
-- 所有命中 contig 的浅色背景使用统一浅色，以便和全图未命中的浅灰背景区分，避免多条 query 的浅底难以判断。
+- `Light hit background` controls whether hit contigs may show a light background in alignment/read-path color modes.
+- Query colours gives each query an `f` checkbox, a `b` checkbox, and a color picker.
+- `f` means foreground. It controls whether the dark aligned segments for that query are shown.
+- `b` means background. It controls whether that query contributes to the light hit background.
+- For a single query, you can show a light hit-contig background while keeping the dark aligned segment visible.
+- When `b` is disabled for a single query, the light background is hidden and only the dark aligned segment remains.
+- For multiple queries, per-query light backgrounds are disabled by default. Dark aligned segments use different query colors.
+- All hit contigs use one shared light background color, so the background is distinguishable from the unhit light gray graph background and remains readable when several queries overlap.
 
-例如三条 query 可以分别显示红、蓝、绿的深色命中片段；如果开启背景，只用统一浅色标记这些 contig 曾被命中。
+For example, three queries can show red, blue, and green dark aligned segments. If background is enabled, a shared light color marks contigs that were hit.
 
 ## 9. Export
 
-顶部右侧快速导出按钮会用默认文件名保存当前图。
+The quick export button on the top right saves the current graph with a default file name.
 
-Export options 中包含：
+Export options include:
 
-- Format：GFA、FASTA、SVG image
-- Save graph：选择路径和文件名保存当前图
-- Save SVG view：保存当前视图为 SVG 图片
-- Selected：导出 selected links 或 selected SVG 内容
-- History：导出 edit history JSON
+- Format: GFA, FASTA, or SVG image
+- Save graph: choose path and file name for the current graph
+- Save SVG view: save the current view as an SVG image
+- Selected: export selected links or selected SVG content
+- History: export edit history JSON
 
-浏览器模式中，导出会弹出保存文件对话框，可选择路径并重命名，而不是立即下载。
+In browser mode, export opens a save-file dialog so you can choose a path and rename the file instead of immediately downloading.
 
-macOS standalone app 中，导出会连接系统文件选择器，可选择保存位置和文件名。
+In the macOS standalone app, export uses the system file picker so you can choose the save location and file name.
 
-SVG 导出会保留当前 Cose、Band 或 Twin 视图中的可见 label、颜色和 alignment foreground 命中片段。
+SVG export preserves visible labels, colors, and alignment foreground hit segments from the current Cose, Band, or Twin view.
 
-## 10. 桌面版和 standalone 打包
+## 10. Desktop and Standalone Builds
 
-构建 macOS app：
+Build the macOS app:
 
 ```bash
 scripts/setup_local_dev.sh --desktop
 scripts/build_desktop_app.sh
 ```
 
-输出：
+Output:
 
 ```text
 dist/GFA_Editor.app
 ```
 
-在 Windows 11 x86_64 上构建 Windows executable：
+Build the Windows executable on Windows 11 x86_64:
 
 ```powershell
 scripts\build_windows_exe.ps1
 ```
 
-输出：
+Output:
 
 ```text
 dist\GFA_Editor\GFA_Editor.exe
 ```
 
-Windows 分发时需要分享整个 `dist\GFA_Editor` 文件夹，因为其中包含运行时、frontend 文件、示例数据和打包的 alignment tools。
+When distributing the Windows build, share the whole `dist\GFA_Editor` folder because it contains the runtime, frontend files, example data, and packaged alignment tools.
 
-app 图标源文件是：
+The app icon source file is:
 
 ```text
 packaging/icons/GFA_Editor_source.png
 ```
 
-重新生成图标：
+Regenerate icons:
 
 ```bash
 python scripts/generate_app_icons.py
 ```
 
-该脚本会生成 frontend 使用的 PNG、macOS `.icns`、Windows `.ico` 和 iconset PNG 文件。
+The script generates the frontend PNG, macOS `.icns`, Windows `.ico`, and iconset PNG files.
 
-## 11. 常见问题
+## 11. Troubleshooting
 
-端口占用时，先尝试：
+If the port is already in use, first try:
 
 ```bash
 scripts/stop_local.sh
 ```
 
-如果不是 GFA Editor 自己占用端口，用：
+If the port is used by another process:
 
 ```bash
 lsof -nP -iTCP:8000 -sTCP:LISTEN
 kill <PID>
 ```
 
-alignment 运行失败时，检查 `minimap2` 或 `blastn` 是否已安装，或者是否已收集到：
+If alignment fails, check whether `minimap2` or `blastn` is installed, or whether the tools were collected into:
 
 ```text
 packaging/bin/<platform>/
 ```
 
-桌面版没有打开内嵌窗口而转为浏览器模式时，查看日志：
+If the desktop app does not open an embedded window and falls back to browser mode, check the log:
 
 ```text
 ~/GFAEditorData/desktop.log
 ```
 
-未签名 macOS 本地构建可能需要右键 Open，或清除 quarantine：
+Unsigned local macOS builds may require right-clicking Open or clearing quarantine:
 
 ```bash
 scripts/macos_clear_quarantine.sh dist/GFA_Editor.app
