@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import math
 from pathlib import Path
 import struct
@@ -9,6 +10,8 @@ import zlib
 ROOT_DIR = Path(__file__).resolve().parents[1]
 ICON_DIR = ROOT_DIR / "packaging" / "icons"
 ICONSET_DIR = ICON_DIR / "GFA_Editor.iconset"
+SOURCE_PNG_PATH = ICON_DIR / "GFA_Editor_source.png"
+FRONTEND_ICON_PATH = ROOT_DIR / "frontend" / "app-icon.png"
 SVG_PATH = ICON_DIR / "GFA_Editor.svg"
 ICNS_PATH = ICON_DIR / "GFA_Editor.icns"
 ICO_PATH = ICON_DIR / "GFA_Editor.ico"
@@ -174,6 +177,247 @@ def write_png(path: Path, size: int, pixels: list[tuple[int, int, int, int]]) ->
     path.write_bytes(bytes(png))
 
 
+def paeth_predictor(left: int, up: int, upper_left: int) -> int:
+    p = left + up - upper_left
+    pa = abs(p - left)
+    pb = abs(p - up)
+    pc = abs(p - upper_left)
+    if pa <= pb and pa <= pc:
+        return left
+    if pb <= pc:
+        return up
+    return upper_left
+
+
+def read_png(path: Path) -> tuple[int, int, list[tuple[int, int, int, int]]]:
+    data = path.read_bytes()
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError(f"{path} is not a PNG file")
+    position = 8
+    width = height = bit_depth = color_type = interlace = None
+    idat = bytearray()
+    while position < len(data):
+        length = struct.unpack(">I", data[position : position + 4])[0]
+        kind = data[position + 4 : position + 8]
+        chunk = data[position + 8 : position + 8 + length]
+        position += length + 12
+        if kind == b"IHDR":
+            width, height, bit_depth, color_type, _compression, _filter, interlace = struct.unpack(">IIBBBBB", chunk)
+        elif kind == b"IDAT":
+            idat.extend(chunk)
+        elif kind == b"IEND":
+            break
+
+    if width is None or height is None or bit_depth != 8 or interlace != 0 or color_type not in {2, 6}:
+        raise ValueError("Source icon PNG must be 8-bit non-interlaced RGB or RGBA")
+
+    channels = 4 if color_type == 6 else 3
+    stride = width * channels
+    raw = zlib.decompress(bytes(idat))
+    previous = [0] * stride
+    offset = 0
+    pixels: list[tuple[int, int, int, int]] = []
+    for _row_index in range(height):
+        filter_type = raw[offset]
+        offset += 1
+        row = list(raw[offset : offset + stride])
+        offset += stride
+        recon: list[int] = []
+        for index, value in enumerate(row):
+            left = recon[index - channels] if index >= channels else 0
+            up = previous[index]
+            upper_left = previous[index - channels] if index >= channels else 0
+            if filter_type == 0:
+                decoded = value
+            elif filter_type == 1:
+                decoded = value + left
+            elif filter_type == 2:
+                decoded = value + up
+            elif filter_type == 3:
+                decoded = value + ((left + up) // 2)
+            elif filter_type == 4:
+                decoded = value + paeth_predictor(left, up, upper_left)
+            else:
+                raise ValueError(f"Unsupported PNG filter type: {filter_type}")
+            recon.append(decoded & 0xFF)
+        previous = recon
+        for index in range(0, stride, channels):
+            r, g, b = recon[index : index + 3]
+            a = recon[index + 3] if channels == 4 else 255
+            pixels.append((r, g, b, a))
+    return width, height, pixels
+
+
+def remove_edge_background(
+    width: int,
+    height: int,
+    pixels: list[tuple[int, int, int, int]],
+    threshold: int = 28,
+) -> list[tuple[int, int, int, int]]:
+    def is_background(index: int) -> bool:
+        r, g, b, a = pixels[index]
+        return a > 0 and max(r, g, b) <= threshold
+
+    visited = [False] * (width * height)
+    queue: deque[int] = deque()
+    for x in range(width):
+        for y in (0, height - 1):
+            index = y * width + x
+            if is_background(index):
+                visited[index] = True
+                queue.append(index)
+    for y in range(height):
+        for x in (0, width - 1):
+            index = y * width + x
+            if not visited[index] and is_background(index):
+                visited[index] = True
+                queue.append(index)
+
+    while queue:
+        index = queue.popleft()
+        x = index % width
+        y = index // width
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if nx < 0 or nx >= width or ny < 0 or ny >= height:
+                continue
+            neighbor = ny * width + nx
+            if visited[neighbor] or not is_background(neighbor):
+                continue
+            visited[neighbor] = True
+            queue.append(neighbor)
+
+    result = pixels[:]
+    for index, is_edge_background in enumerate(visited):
+        if is_edge_background:
+            result[index] = (0, 0, 0, 0)
+    return result
+
+
+def crop_visible_square(
+    width: int,
+    height: int,
+    pixels: list[tuple[int, int, int, int]],
+) -> tuple[int, int, list[tuple[int, int, int, int]]]:
+    visible = [index for index, pixel in enumerate(pixels) if pixel[3] > 0]
+    if not visible:
+        return width, height, pixels
+    min_x = min(index % width for index in visible)
+    max_x = max(index % width for index in visible)
+    min_y = min(index // width for index in visible)
+    max_y = max(index // width for index in visible)
+    box_width = max_x - min_x + 1
+    box_height = max_y - min_y + 1
+    side = max(box_width, box_height)
+    center_x = (min_x + max_x) / 2
+    center_y = (min_y + max_y) / 2
+    left = int(round(center_x - side / 2))
+    top = int(round(center_y - side / 2))
+    left = max(0, min(left, width - side))
+    top = max(0, min(top, height - side))
+    cropped: list[tuple[int, int, int, int]] = []
+    for y in range(top, top + side):
+        for x in range(left, left + side):
+            cropped.append(pixels[y * width + x])
+    return side, side, cropped
+
+
+def resize_pixels(
+    src_width: int,
+    src_height: int,
+    pixels: list[tuple[int, int, int, int]],
+    size: int,
+) -> list[tuple[int, int, int, int]]:
+    if src_width == size and src_height == size:
+        return pixels[:]
+
+    def sample(x: int, y: int) -> tuple[int, int, int, int]:
+        x = max(0, min(src_width - 1, x))
+        y = max(0, min(src_height - 1, y))
+        return pixels[y * src_width + x]
+
+    output: list[tuple[int, int, int, int]] = []
+    for y in range(size):
+        sy = (y + 0.5) * src_height / size - 0.5
+        y0 = math.floor(sy)
+        y1 = y0 + 1
+        wy = sy - y0
+        for x in range(size):
+            sx = (x + 0.5) * src_width / size - 0.5
+            x0 = math.floor(sx)
+            x1 = x0 + 1
+            wx = sx - x0
+            accum = [0.0, 0.0, 0.0, 0.0]
+            for px, x_weight in ((x0, 1 - wx), (x1, wx)):
+                for py, y_weight in ((y0, 1 - wy), (y1, wy)):
+                    weight = x_weight * y_weight
+                    r, g, b, a = sample(px, py)
+                    alpha = a / 255
+                    accum[0] += r * alpha * weight
+                    accum[1] += g * alpha * weight
+                    accum[2] += b * alpha * weight
+                    accum[3] += a * weight
+            if accum[3] <= 0:
+                output.append((0, 0, 0, 0))
+            else:
+                alpha = accum[3] / 255
+                output.append(
+                    (
+                        clamp(accum[0] / alpha),
+                        clamp(accum[1] / alpha),
+                        clamp(accum[2] / alpha),
+                        clamp(accum[3]),
+                    )
+                )
+    return output
+
+
+def write_source_svg_reference() -> None:
+    SVG_PATH.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <image href="ico_256.png" x="0" y="0" width="1024" height="1024" preserveAspectRatio="xMidYMid meet"/>
+</svg>
+""",
+        encoding="utf-8",
+    )
+
+
+def write_icon_assets_from_source() -> bool:
+    if not SOURCE_PNG_PATH.exists():
+        return False
+
+    width, height, pixels = read_png(SOURCE_PNG_PATH)
+    transparent = remove_edge_background(width, height, pixels)
+    crop_width, crop_height, cropped = crop_visible_square(width, height, transparent)
+
+    iconset_specs = [
+        ("icon_16x16.png", 16),
+        ("icon_16x16@2x.png", 32),
+        ("icon_32x32.png", 32),
+        ("icon_32x32@2x.png", 64),
+        ("icon_128x128.png", 128),
+        ("icon_128x128@2x.png", 256),
+        ("icon_256x256.png", 256),
+        ("icon_256x256@2x.png", 512),
+        ("icon_512x512.png", 512),
+        ("icon_512x512@2x.png", 1024),
+    ]
+    for filename, size in iconset_specs:
+        write_png(ICONSET_DIR / filename, size, resize_pixels(crop_width, crop_height, cropped, size))
+
+    ico_pngs = []
+    for size in [16, 32, 48, 64, 128, 256]:
+        path = ICON_DIR / f"ico_{size}.png"
+        write_png(path, size, resize_pixels(crop_width, crop_height, cropped, size))
+        ico_pngs.append(path)
+
+    FRONTEND_ICON_PATH.parent.mkdir(parents=True, exist_ok=True)
+    write_png(FRONTEND_ICON_PATH, 256, resize_pixels(crop_width, crop_height, cropped, 256))
+    write_ico(ico_pngs)
+    write_icns()
+    write_source_svg_reference()
+    return True
+
+
 def draw_icon(size: int) -> list[tuple[int, int, int, int]]:
     scale = 4 if size <= 128 else 2 if size <= 512 else 1
     c = Canvas(size, scale=scale)
@@ -285,6 +529,14 @@ def write_icns() -> None:
 def main() -> int:
     ICON_DIR.mkdir(parents=True, exist_ok=True)
     ICONSET_DIR.mkdir(parents=True, exist_ok=True)
+    if write_icon_assets_from_source():
+        print(f"Wrote icons from {SOURCE_PNG_PATH}")
+        print(f"Wrote {FRONTEND_ICON_PATH}")
+        print(f"Wrote {SVG_PATH}")
+        print(f"Wrote {ICNS_PATH}")
+        print(f"Wrote {ICO_PATH}")
+        return 0
+
     write_svg()
 
     iconset_specs = [

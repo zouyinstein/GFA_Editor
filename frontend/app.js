@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contributors
+
 let cy = null;
 let graphState = null;
 let currentLayout = "cose";
@@ -5,6 +8,7 @@ let toastTimer = null;
 let pendingRename = null;
 let pendingDuplicateSource = null;
 let pendingSelectNodeId = null;
+let pendingMergeLayout = null;
 let repeatResolutionContext = null;
 let serverSavePathAuto = true;
 let serverSaveSourceName = null;
@@ -60,6 +64,7 @@ const bandageState = {
 };
 
 const randomColorById = new Map();
+const alignmentQuerySettings = new Map();
 const randomPalette = [
   "#2fa4c8",
   "#4bcc4b",
@@ -72,10 +77,18 @@ const randomPalette = [
   "#3347ff",
   "#7d6f55",
 ];
+const alignmentPalette = [
+  "#a51f5d",
+  "#1976d2",
+  "#2e7d32",
+  "#f57c00",
+  "#6a1b9a",
+];
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ALIGNMENT_UNHIT_NODE_COLOR = "#dbe1d4";
 const ALIGNMENT_UNHIT_LINK_COLOR = "#aab5a5";
+const ALIGNMENT_HIT_BACKGROUND_COLOR = "#bfd7c5";
 const ALIGNMENT_HIT_NODE_COLOR = "#edbdb4";
 const ALIGNMENT_HIT_LINK_COLOR = "#dda69f";
 const ALIGNMENT_HIT_BORDER_COLOR = "#b96960";
@@ -200,6 +213,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupAlignmentPresets();
   setupCollapsiblePanels();
   bindEvents();
+  setupToolbarTooltips();
   resetDetails();
   renderStats(null);
   renderHistory({});
@@ -223,6 +237,7 @@ function cacheDom() {
     "export-menu-toggle",
     "export-menu-panel",
     "quick-export-button",
+    "export-svg-button",
     "history-file",
     "history-file-label",
     "apply-history-button",
@@ -247,6 +262,8 @@ function cacheDom() {
     "query-fasta-file-label",
     "alignment-run-button",
     "alignment-read-select",
+    "alignment-show-background",
+    "alignment-query-list",
     "blast-file",
     "blast-file-label",
     "blast-upload-button",
@@ -388,6 +405,24 @@ function setupCollapsiblePanels() {
   });
 }
 
+function setupToolbarTooltips() {
+  const toolbarButtons = [
+    ...document.querySelectorAll(".layout-mode-group > button"),
+    ...document.querySelectorAll(".graph-toolbar-left > .display-menu > button"),
+    ...document.querySelectorAll(".graph-actions > button, .graph-actions > .display-menu > button"),
+    ...document.querySelectorAll(".graph-export-actions > button, .graph-export-actions > .display-menu > button"),
+  ];
+  toolbarButtons.forEach((button) => {
+    const label = button.getAttribute("aria-label")
+      || button.getAttribute("title")
+      || button.textContent.trim();
+    if (label) {
+      button.dataset.tooltip = label;
+      button.removeAttribute("title");
+    }
+  });
+}
+
 function bindEvents() {
   dom.gfaFile.addEventListener("change", () => {
     dom.gfaFileLabel.textContent = dom.gfaFile.files[0]?.name || "Choose GFA";
@@ -445,6 +480,31 @@ function bindEvents() {
   });
   dom.alignmentRunButton.addEventListener("click", runAlignmentFromQueryFile);
   dom.alignmentReadSelect.addEventListener("change", selectAlignmentRead);
+  dom.alignmentShowBackground.addEventListener("change", refreshVisualProperties);
+  dom.alignmentQueryList.addEventListener("change", (event) => {
+    const target = event.target;
+    const row = target.closest?.("[data-query-id]");
+    if (!row) return;
+    const settings = ensureAlignmentQuerySettings(row.dataset.queryId);
+    if (target.matches('input[type="checkbox"][data-role="visible"]')) {
+      settings.visible = target.checked;
+    }
+    if (target.matches('input[type="checkbox"][data-role="background"]')) {
+      settings.background = target.checked;
+      settings.backgroundTouched = true;
+    }
+    if (target.matches('input[type="color"]')) {
+      settings.color = target.value;
+    }
+    refreshVisualProperties();
+  });
+  dom.alignmentQueryList.addEventListener("input", (event) => {
+    const target = event.target;
+    const row = target.closest?.("[data-query-id]");
+    if (!row || !target.matches('input[type="color"]')) return;
+    ensureAlignmentQuerySettings(row.dataset.queryId).color = target.value;
+    refreshVisualProperties();
+  });
 
   dom.serverRefreshButton.addEventListener("click", loadServerFiles);
   dom.serverFileSelect.addEventListener("change", updateServerFileButtons);
@@ -493,8 +553,8 @@ function bindEvents() {
     showAlignmentVisualMode();
   });
 
-  dom.undoButton.addEventListener("click", () => postAction("/api/undo", "Undo complete"));
-  dom.redoButton.addEventListener("click", () => postAction("/api/redo", "Redo complete"));
+  dom.undoButton.addEventListener("click", () => postUndoRedoAction("/api/undo", "Undo complete"));
+  dom.redoButton.addEventListener("click", () => postUndoRedoAction("/api/redo", "Redo complete"));
   dom.clearHistoryButton.addEventListener("click", clearOperationHistory);
   dom.quickExportButton.addEventListener("click", quickDownloadExport);
   dom.exportMenuToggle.addEventListener("click", (event) => {
@@ -503,6 +563,7 @@ function bindEvents() {
   });
   dom.exportMenuPanel.addEventListener("click", (event) => event.stopPropagation());
   dom.exportButton.addEventListener("click", downloadExport);
+  dom.exportSvgButton.addEventListener("click", () => saveSvgExport({ selectedOnly: false, quick: false }));
   dom.exportSelectedButton.addEventListener("click", downloadSelectedExport);
   dom.exportHistoryButton.addEventListener("click", downloadEditHistory);
   dom.applyHistoryButton.addEventListener("click", applyHistoryFile);
@@ -575,6 +636,8 @@ function bindEvents() {
     if (serverSavePathAuto) {
       updateServerSavePath();
     }
+    updateServerFileButtons();
+    updateSelectionButtons(getSelectedGraphItem());
   });
   dom.nodeWidth.addEventListener("input", refreshVisualProperties);
   dom.nodeSizeScale.addEventListener("input", refreshVisualProperties);
@@ -672,13 +735,38 @@ async function postAction(path, success) {
   });
 }
 
+async function postUndoRedoAction(path, success) {
+  await callAndRender(path, {
+    method: "POST",
+    loading: "Updating graph...",
+    success,
+    relayout: shouldRelayoutUndoRedo,
+  });
+}
+
 function shouldAutoRedraw() {
   return Boolean(dom.autoRedraw?.checked);
+}
+
+function shouldRelayoutUndoRedo(nextPayload, previousPayload) {
+  return shouldAutoRedraw() || graphAddsNodes(previousPayload, nextPayload);
+}
+
+function graphAddsNodes(previousPayload, nextPayload) {
+  const previousIds = new Set((previousPayload?.nodes || []).map((node) => node.data?.id).filter(Boolean));
+  return (nextPayload?.nodes || []).some((node) => {
+    const nodeId = node.data?.id;
+    return nodeId && !previousIds.has(nodeId);
+  });
 }
 
 async function downloadExport() {
   if (!graphState) return;
   const format = dom.exportFormat.value;
+  if (format === "svg") {
+    await saveSvgExport({ selectedOnly: false, quick: false });
+    return;
+  }
   try {
     setStatus(`Exporting ${format.toUpperCase()}...`);
     const response = await fetch(`/api/export?format=${encodeURIComponent(format)}`);
@@ -707,6 +795,10 @@ async function downloadExport() {
 async function quickDownloadExport() {
   if (!graphState) return;
   const format = dom.exportFormat.value;
+  if (format === "svg") {
+    await saveSvgExport({ selectedOnly: false, quick: true });
+    return;
+  }
   try {
     setStatus(`Exporting ${format.toUpperCase()}...`);
     const response = await fetch(`/api/export?format=${encodeURIComponent(format)}`);
@@ -742,12 +834,20 @@ async function quickDownloadExport() {
 async function downloadSelectedExport() {
   if (!graphState) return;
   const selection = getSelectedGraphSelection();
+  const format = dom.exportFormat.value;
+  if (format === "svg") {
+    if (!selection.nodeIds.length && !selection.edgeIds.length) {
+      showToast("Select one or more graph items");
+      return;
+    }
+    await saveSvgExport({ selectedOnly: true, quick: false });
+    return;
+  }
   const edgeIds = selection.edgeIds;
   if (!edgeIds.length) {
     showToast("Select one or more links");
     return;
   }
-  const format = dom.exportFormat.value;
   try {
     setStatus(`Exporting selected links as ${format.toUpperCase()}...`);
     const response = await fetch("/api/export_selection", {
@@ -944,6 +1044,17 @@ async function restoreHistoryTraceStep(traceIndex) {
   );
 }
 
+async function restoreOperationState(stateIndex, label) {
+  await callAndRender("/api/operation_state", {
+    method: "POST",
+    body: JSON.stringify({ state_index: stateIndex }),
+    headers: { "Content-Type": "application/json" },
+    loading: "Restoring operation...",
+    success: label,
+    relayout: true,
+  });
+}
+
 async function clearOperationHistory() {
   await postAction("/api/clear_operation_history", "Operation log cleared");
 }
@@ -1002,6 +1113,9 @@ function browserFileTypesForFilename(filename, mimeType) {
   if (extension === "fasta" || extension === "fa") {
     return [{ description: "FASTA files", accept: { "text/plain": [".fasta", ".fa"] } }];
   }
+  if (extension === "svg") {
+    return [{ description: "SVG images", accept: { "image/svg+xml": [".svg"] } }];
+  }
   if (extension === "json") {
     return [{ description: "JSON files", accept: { "application/json": [".json"] } }];
   }
@@ -1014,6 +1128,7 @@ function fileTypesForFilename(filename) {
   if (extension === "fasta" || extension === "fa") {
     return ["FASTA files (*.fasta;*.fa)", "All files (*.*)"];
   }
+  if (extension === "svg") return ["SVG images (*.svg)", "All files (*.*)"];
   if (extension === "json") return ["JSON files (*.json)", "All files (*.*)"];
   return ["Text files (*.txt)", "All files (*.*)"];
 }
@@ -1029,9 +1144,318 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+async function saveSvgExport({ selectedOnly = false, quick = false } = {}) {
+  if (!graphState) return;
+  try {
+    setStatus("Exporting SVG...");
+    const svgText = buildGraphSvgExport({ selectedOnly });
+    const filename = `${fileStem(graphState.session?.source_name, "graph")}${selectedOnly ? ".selected" : ""}.svg`;
+    if (quick) {
+      const desktopApi = window.pywebview?.api;
+      if (desktopApi && typeof desktopApi.save_text_file_default === "function") {
+        const result = await desktopApi.save_text_file_default({ filename, contents: svgText });
+        if (!result?.ok) throw new Error(result?.message || "Save failed");
+        showToast("SVG exported");
+        setStatus(result.path ? `Saved to ${result.path}` : "Ready");
+        return;
+      }
+      downloadBlob(new Blob([svgText], { type: "image/svg+xml" }), filename);
+      showToast("SVG exported");
+      setStatus("Ready");
+      return;
+    }
+    const saved = await saveTextExport(svgText, filename, "image/svg+xml");
+    if (saved.canceled) {
+      setStatus("Export canceled");
+      return;
+    }
+    showToast("SVG exported");
+    setStatus("Ready");
+  } catch (error) {
+    setStatus(error.message);
+    showToast(error.message);
+  }
+}
+
+function buildGraphSvgExport({ selectedOnly = false } = {}) {
+  const selection = getSelectedGraphSelection();
+  if (selectedOnly && !selection.nodeIds.length && !selection.edgeIds.length) {
+    throw new Error("Select one or more graph items");
+  }
+  const margin = 34;
+  const gap = 70;
+  const root = svgEl("svg", { xmlns: SVG_NS, version: "1.1" });
+  root.appendChild(svgEl("title", {}, `${fileStem(graphState.session?.source_name, "graph")} ${currentLayout}`));
+  root.appendChild(svgEl("style", {}, exportSvgStyle()));
+
+  if (isTwinMode()) {
+    const left = buildCytoscapeSvgLayer({ selectedOnly, selection });
+    const right = buildBandageSvgLayer({ selectedOnly, selection });
+    if (!hasBounds(left.bounds) && !hasBounds(right.bounds)) throw new Error("Nothing visible to export");
+    const leftSize = boundsSize(left.bounds);
+    const rightSize = boundsSize(right.bounds);
+    const width = Math.ceil(leftSize.width + rightSize.width + gap + margin * 2);
+    const height = Math.ceil(Math.max(leftSize.height, rightSize.height) + margin * 2);
+    root.setAttribute("width", String(width));
+    root.setAttribute("height", String(height));
+    root.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    root.appendChild(svgEl("rect", { class: "export-background", x: 0, y: 0, width, height }));
+    if (hasBounds(left.bounds)) {
+      const wrap = svgEl("g", {
+        transform: `translate(${round(margin - left.bounds.minX)} ${round(margin - left.bounds.minY)})`,
+      });
+      wrap.appendChild(left.group);
+      root.appendChild(wrap);
+    }
+    root.appendChild(svgEl("line", {
+      class: "export-divider",
+      x1: margin + leftSize.width + gap / 2,
+      y1: margin / 2,
+      x2: margin + leftSize.width + gap / 2,
+      y2: height - margin / 2,
+    }));
+    if (hasBounds(right.bounds)) {
+      const wrap = svgEl("g", {
+        transform: `translate(${round(margin + leftSize.width + gap - right.bounds.minX)} ${round(margin - right.bounds.minY)})`,
+      });
+      wrap.appendChild(right.group);
+      root.appendChild(wrap);
+    }
+  } else {
+    const layer = isBandageMode()
+      ? buildBandageSvgLayer({ selectedOnly, selection })
+      : buildCytoscapeSvgLayer({ selectedOnly, selection });
+    if (!hasBounds(layer.bounds)) throw new Error("Nothing visible to export");
+    const size = boundsSize(layer.bounds);
+    const width = Math.ceil(size.width + margin * 2);
+    const height = Math.ceil(size.height + margin * 2);
+    root.setAttribute("width", String(width));
+    root.setAttribute("height", String(height));
+    root.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    root.appendChild(svgEl("rect", { class: "export-background", x: 0, y: 0, width, height }));
+    const wrap = svgEl("g", {
+      transform: `translate(${round(margin - layer.bounds.minX)} ${round(margin - layer.bounds.minY)})`,
+    });
+    wrap.appendChild(layer.group);
+    root.appendChild(wrap);
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(root)}\n`;
+}
+
+function buildCytoscapeSvgLayer({ selectedOnly = false, selection = null } = {}) {
+  const group = svgEl("g", { class: "export-cose-layer" });
+  const bounds = emptyBounds();
+  if (!cy) return { group, bounds };
+  const selectedNodeIds = new Set(selection?.nodeIds || []);
+  const selectedEdgeIds = new Set(selection?.edgeIds || []);
+  const nodeIds = new Set(selectedNodeIds);
+  const edgeLayer = svgEl("g", { class: "export-edge-layer" });
+  cy.edges().forEach((edge) => {
+    if (!edge.visible()) return;
+    if (selectedOnly && !selectedEdgeIds.has(edge.id())) return;
+    const source = edge.source();
+    const target = edge.target();
+    if (!source.visible() || !target.visible()) return;
+    if (selectedOnly) {
+      nodeIds.add(source.id());
+      nodeIds.add(target.id());
+    }
+    const sourcePosition = source.position();
+    const targetPosition = target.position();
+    addPointToBounds(bounds, sourcePosition, 28);
+    addPointToBounds(bounds, targetPosition, 28);
+    const data = enrichEdgeData(edge.data());
+    const color = data.renderColor || chooseEdgeColor(data);
+    const width = Math.max(1.2, Number(data.width || 2));
+    edgeLayer.appendChild(svgEl("path", {
+      class: "export-edge",
+      d: `M ${round(sourcePosition.x)} ${round(sourcePosition.y)} L ${round(targetPosition.x)} ${round(targetPosition.y)}`,
+      stroke: color,
+      "stroke-width": width,
+    }));
+    edgeLayer.appendChild(svgEl("polygon", {
+      class: "export-arrow",
+      points: arrowPolygonPoints(sourcePosition, targetPosition, Math.max(7, width + 5)),
+      fill: color,
+    }));
+    if (data.renderLabel) {
+      appendSvgText(edgeLayer, data.renderLabel, (sourcePosition.x + targetPosition.x) / 2, (sourcePosition.y + targetPosition.y) / 2 - 7, "export-edge-label");
+    }
+  });
+  group.appendChild(edgeLayer);
+  if (!selectedOnly) {
+    cy.nodes().forEach((node) => {
+      if (node.visible()) nodeIds.add(node.id());
+    });
+  }
+  const nodeLayer = svgEl("g", { class: "export-node-layer" });
+  cy.nodes().forEach((node) => {
+    if (!node.visible() || !nodeIds.has(node.id())) return;
+    const data = enrichNodeData(node.data(), graphState.stats);
+    const position = node.position();
+    const width = Math.max(6, Number(data.renderWidth || data.size || 24));
+    const height = Math.max(6, Number(data.renderHeight || data.size || width));
+    addPointToBounds(bounds, position, Math.max(width, height) / 2 + 22);
+    const color = data.renderColor || chooseNodeColor(data, graphState.stats);
+    nodeLayer.appendChild(
+      data.shape === "rectangle"
+        ? svgEl("rect", { class: "export-node", x: position.x - width / 2, y: position.y - height / 2, width, height, rx: 2.5, fill: color })
+        : svgEl("ellipse", { class: "export-node", cx: position.x, cy: position.y, rx: width / 2, ry: height / 2, fill: color }),
+    );
+    if (data.renderLabel) {
+      appendSvgText(nodeLayer, data.renderLabel, position.x, position.y + height / 2 + 12, "export-node-label");
+    }
+  });
+  group.appendChild(nodeLayer);
+  return { group, bounds };
+}
+
+function buildBandageSvgLayer({ selectedOnly = false, selection = null } = {}) {
+  const group = svgEl("g", { class: "export-bandage-layer" });
+  const bounds = emptyBounds();
+  const selectedNodeIds = new Set(selection?.nodeIds || []);
+  const selectedEdgeIds = new Set(selection?.edgeIds || []);
+  const nodeIds = new Set(selectedNodeIds);
+  const linkLayer = svgEl("g", { class: "export-bandage-link-layer" });
+  getClientEdges().forEach((edge) => {
+    if (!bandageState.visibleEdgeIds.has(edge.id)) return;
+    if (selectedOnly && !selectedEdgeIds.has(edge.id)) return;
+    if (selectedOnly) {
+      nodeIds.add(edge.source);
+      nodeIds.add(edge.target);
+    }
+    const geometry = getLinkGeometry(edge);
+    if (!geometry) return;
+    quadraticSamplePoints(geometry.source, geometry.control, geometry.target, 8).forEach((point) => {
+      addPointToBounds(bounds, point, displayEdgeWidth(edge) + 12);
+    });
+    const color = chooseEdgeColor(edge, "bandage");
+    const edgeWidth = displayEdgeWidth(edge);
+    linkLayer.appendChild(svgEl("path", {
+      class: "export-bandage-link",
+      d: geometry.path,
+      stroke: color,
+      "stroke-width": Math.max(2.3, edgeWidth * 0.78),
+    }));
+    linkLayer.appendChild(svgEl("polygon", {
+      class: "export-arrow",
+      points: geometry.arrow.map((point) => `${point.x},${point.y}`).join(" "),
+      fill: color,
+    }));
+    if (dom.showLinkLabels?.checked && (edge.customLabel || edge.label)) {
+      appendSvgText(linkLayer, edge.customLabel || edge.label, geometry.label.x, geometry.label.y - 6, "export-edge-label");
+    }
+  });
+  group.appendChild(linkLayer);
+  if (!selectedOnly) {
+    getClientNodes().forEach((node) => {
+      if (bandageState.visibleNodeIds.has(node.id)) nodeIds.add(node.id);
+    });
+  }
+  const contigLayer = svgEl("g", { class: "export-bandage-contig-layer" });
+  getClientNodes().forEach((node) => {
+    if (!nodeIds.has(node.id) || !bandageState.visibleNodeIds.has(node.id)) return;
+    const geometry = getGlyphGeometry(node.id);
+    if (!geometry) return;
+    (geometry.points?.length ? geometry.points : [geometry.start, geometry.end, geometry.control]).forEach((point) => {
+      addPointToBounds(bounds, point, geometry.width / 2 + 20);
+    });
+    const contigGroup = svgEl("g", { class: "export-bandage-contig" });
+    contigGroup.appendChild(svgEl("path", {
+      class: "bandage-contig-path",
+      d: geometry.path,
+      stroke: chooseNodeColor(node, graphState.stats, "bandage"),
+      "stroke-width": geometry.width,
+    }));
+    appendBandageAlignmentSpans(contigGroup, node, geometry);
+    appendBandageEndpoint(contigGroup, geometry.start, "-");
+    appendBandageEndpoint(contigGroup, geometry.end, "+");
+    appendBandageNodeLabel(contigGroup, node, geometry);
+    contigLayer.appendChild(contigGroup);
+  });
+  group.appendChild(contigLayer);
+  return { group, bounds };
+}
+
+function exportSvgStyle() {
+  return `
+    .export-background { fill: #fbfcf8; }
+    .export-divider { stroke: #d9ded2; stroke-width: 1; }
+    .export-edge, .export-bandage-link, .bandage-contig-path, .bandage-query-hit-block { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .export-node { stroke: rgba(31, 37, 33, 0.45); stroke-width: 1.2; }
+    .export-node-label, .export-edge-label, .bandage-node-label, .bandage-link-label {
+      fill: #1f2521;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      font-size: 10px;
+      text-anchor: middle;
+      dominant-baseline: central;
+    }
+    .export-edge-label, .bandage-link-label { font-size: 9px; }
+    .bandage-label-outline { paint-order: stroke; stroke: #fbfcf8; stroke-width: 4px; stroke-linejoin: round; }
+    .bandage-query-hit-block { stroke-linecap: butt; }
+    .bandage-endpoint { fill: rgba(31, 37, 33, 0.85); }
+    .bandage-endpoint-label { fill: #ffffff; font-size: 7px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+  `;
+}
+
+function appendSvgText(parent, text, x, y, className) {
+  const lines = String(text || "").split("\n").filter((line) => line.trim());
+  const lineHeight = className.includes("edge") ? 10 : 11;
+  const startY = y - ((lines.length - 1) * lineHeight) / 2;
+  lines.forEach((line, index) => {
+    parent.appendChild(svgEl("text", { class: className, x, y: startY + index * lineHeight }, line));
+  });
+}
+
+function emptyBounds() {
+  return { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+}
+
+function hasBounds(bounds) {
+  return Number.isFinite(bounds.minX) && Number.isFinite(bounds.minY) && Number.isFinite(bounds.maxX) && Number.isFinite(bounds.maxY);
+}
+
+function addPointToBounds(bounds, point, padding = 0) {
+  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+  bounds.minX = Math.min(bounds.minX, point.x - padding);
+  bounds.minY = Math.min(bounds.minY, point.y - padding);
+  bounds.maxX = Math.max(bounds.maxX, point.x + padding);
+  bounds.maxY = Math.max(bounds.maxY, point.y + padding);
+}
+
+function boundsSize(bounds) {
+  if (!hasBounds(bounds)) return { width: 0, height: 0 };
+  return { width: Math.max(1, bounds.maxX - bounds.minX), height: Math.max(1, bounds.maxY - bounds.minY) };
+}
+
+function arrowPolygonPoints(source, target, size) {
+  const dx = target.x - source.x;
+  const dy = target.y - source.y;
+  const distance = Math.max(Math.hypot(dx, dy), 1);
+  const angle = Math.atan2(dy, dx);
+  const tip = { x: target.x - (dx / distance) * Math.min(size * 0.8, distance * 0.18), y: target.y - (dy / distance) * Math.min(size * 0.8, distance * 0.18) };
+  return [
+    tip,
+    { x: tip.x - Math.cos(angle - 0.5) * size, y: tip.y - Math.sin(angle - 0.5) * size },
+    { x: tip.x - Math.cos(angle + 0.5) * size, y: tip.y - Math.sin(angle + 0.5) * size },
+  ].map((point) => `${round(point.x)},${round(point.y)}`).join(" ");
+}
+
+function quadraticSamplePoints(start, control, end, steps = 8) {
+  const points = [];
+  for (let index = 0; index <= steps; index += 1) {
+    points.push(quadraticPoint(start, control, end, index / steps));
+  }
+  return points;
+}
+
 function fileStem(rawName, fallback) {
   const name = String(rawName || fallback || "file").replace(/^server:/, "").split("/").pop() || fallback || "file";
   return name.replace(/\.[^.]+$/, "") || fallback || "file";
+}
+
+function isBackendExportFormat(format) {
+  return ["gfa", "fasta", "fa"].includes(String(format || "").toLowerCase());
 }
 
 async function loadServerFiles() {
@@ -1081,6 +1505,10 @@ async function loadSelectedServerFile() {
 async function saveGraphToServer() {
   if (!graphState) return;
   const format = dom.exportFormat.value;
+  if (!isBackendExportFormat(format)) {
+    showToast("Use export options to save SVG views");
+    return;
+  }
   const path = dom.serverSavePath.value.trim();
   try {
     setStatus(`Saving ${format.toUpperCase()} to local workspace...`);
@@ -1139,6 +1567,10 @@ async function downloadFromSftp() {
 
 async function uploadToSftp() {
   if (!graphState) return;
+  if (!isBackendExportFormat(dom.exportFormat.value)) {
+    showToast("SFTP upload supports GFA/FASTA");
+    return;
+  }
   try {
     setStatus("Uploading via SFTP...");
     const response = await fetch("/api/sftp_upload", {
@@ -1160,8 +1592,9 @@ async function uploadToSftp() {
 
 function updateServerFileButtons() {
   const canLoad = Boolean(dom.serverFileSelect?.value);
+  const canSaveTextGraph = Boolean(graphState && isBackendExportFormat(dom.exportFormat?.value));
   dom.serverLoadButton.disabled = !canLoad;
-  dom.serverSaveButton.disabled = !graphState;
+  dom.serverSaveButton.disabled = !canSaveTextGraph;
   updateSftpButtons();
 }
 
@@ -1178,7 +1611,7 @@ function updateSftpButtons() {
       && dom.sftpRemotePath?.value.trim(),
   );
   dom.sftpDownloadButton.disabled = !hasConnection;
-  dom.sftpUploadButton.disabled = !hasConnection || !graphState;
+  dom.sftpUploadButton.disabled = !hasConnection || !graphState || !isBackendExportFormat(dom.exportFormat?.value);
 }
 
 function updateAlignmentButtons() {
@@ -1202,6 +1635,174 @@ function updateAlignmentReadSelect(alignment) {
   dom.alignmentReadSelect.disabled = !readIds.length;
 }
 
+function renderAlignmentQueryControls(alignment) {
+  if (!dom.alignmentQueryList) return;
+  const readIds = alignment?.read_ids || [];
+  if (dom.alignmentShowBackground) {
+    const backgroundDisabled = !readIds.length;
+    dom.alignmentShowBackground.disabled = backgroundDisabled;
+    dom.alignmentShowBackground.closest("label")?.classList.toggle("is-disabled", backgroundDisabled);
+  }
+  dom.alignmentQueryList.replaceChildren();
+  if (!readIds.length) {
+    const empty = document.createElement("div");
+    empty.className = "alignment-query-empty";
+    empty.textContent = "No alignment queries";
+    dom.alignmentQueryList.appendChild(empty);
+    return;
+  }
+  const multiActive = hasMultipleAlignmentQueries();
+  readIds.forEach((readId, index) => {
+    const settings = ensureAlignmentQuerySettings(readId, index);
+    if (!settings.backgroundTouched) {
+      settings.background = !multiActive;
+    }
+    const row = document.createElement("div");
+    row.className = "alignment-query-item";
+    row.dataset.queryId = readId;
+    const visibleWrap = document.createElement("label");
+    visibleWrap.className = "alignment-query-check";
+    visibleWrap.title = "Front query hit colour";
+    const visible = document.createElement("input");
+    visible.type = "checkbox";
+    visible.dataset.role = "visible";
+    visible.checked = settings.visible !== false;
+    visible.setAttribute("aria-label", `Front ${readId}`);
+    visibleWrap.append(visible, document.createTextNode("f"));
+    const backgroundWrap = document.createElement("label");
+    backgroundWrap.className = "alignment-query-check";
+    backgroundWrap.title = "Light hit background";
+    const background = document.createElement("input");
+    background.type = "checkbox";
+    background.dataset.role = "background";
+    background.checked = settings.background !== false;
+    background.setAttribute("aria-label", `Background ${readId}`);
+    backgroundWrap.append(background, document.createTextNode("b"));
+    const color = document.createElement("input");
+    color.type = "color";
+    color.value = settings.color;
+    color.title = "Query colour";
+    const name = document.createElement("span");
+    name.textContent = readId;
+    row.append(visibleWrap, backgroundWrap, color, name);
+    dom.alignmentQueryList.appendChild(row);
+  });
+}
+
+function ensureAlignmentQuerySettings(readId, fallbackIndex = null) {
+  const key = String(readId || "__alignment__");
+  if (!alignmentQuerySettings.has(key)) {
+    const index = Number.isFinite(fallbackIndex)
+      ? fallbackIndex
+      : Math.floor(hashNumber(key) * alignmentPalette.length);
+    alignmentQuerySettings.set(key, {
+      visible: true,
+      background: true,
+      backgroundTouched: false,
+      color: alignmentPalette[index % alignmentPalette.length],
+    });
+  } else {
+    const settings = alignmentQuerySettings.get(key);
+    if (settings.visible == null) {
+      settings.visible = true;
+    }
+    if (settings.background == null) {
+      settings.background = settings.visible !== false;
+    }
+    if (settings.backgroundTouched == null) {
+      settings.backgroundTouched = false;
+    }
+  }
+  return alignmentQuerySettings.get(key);
+}
+
+function activeAlignmentReadIds() {
+  const alignment = graphState?.session?.alignment;
+  const readIds = alignment?.read_ids || [];
+  const selected = alignment?.selected_read_id || "__all__";
+  if (selected && selected !== "__all__") return [selected];
+  return readIds;
+}
+
+function hasMultipleAlignmentQueries() {
+  return activeAlignmentReadIds().length > 1;
+}
+
+function alignmentQueryVisible(readId) {
+  return ensureAlignmentQuerySettings(readId).visible !== false;
+}
+
+function alignmentQueryBackgroundVisible(readId) {
+  return alignmentQueryVisible(readId) && ensureAlignmentQuerySettings(readId).background !== false;
+}
+
+function visibleAlignmentSpans(data) {
+  return (Array.isArray(data?.alignmentSpans) ? data.alignmentSpans : [])
+    .filter((span) => alignmentQueryVisible(span.qseqid || "__alignment__"));
+}
+
+function alignmentDataHasVisibleHit(data) {
+  if (visibleAlignmentSpans(data).length) return true;
+  const queryId = alignmentQueryId(data);
+  return Boolean(queryId && alignmentQueryVisible(queryId) && (data?.blastBest || data?.blastHitCount));
+}
+
+function alignmentDataShowsHitBackground(data) {
+  if (!alignmentDataHasVisibleHit(data)) return false;
+  const spans = visibleAlignmentSpans(data);
+  if (spans.length) {
+    return spans.some((span) => alignmentQueryBackgroundVisible(span.qseqid || "__alignment__"));
+  }
+  return alignmentQueryBackgroundVisible(alignmentQueryId(data));
+}
+
+function alignmentQueryId(dataOrHit) {
+  if (!dataOrHit) return "__alignment__";
+  if (dataOrHit.qseqid) return String(dataOrHit.qseqid);
+  if (dataOrHit.blastBest?.qseqid) return String(dataOrHit.blastBest.qseqid);
+  const visibleSpan = visibleAlignmentSpans(dataOrHit)[0];
+  if (visibleSpan?.qseqid) return String(visibleSpan.qseqid);
+  const span = Array.isArray(dataOrHit.alignmentSpans) ? dataOrHit.alignmentSpans[0] : null;
+  return span?.qseqid ? String(span.qseqid) : "__alignment__";
+}
+
+function alignmentQueryColor(readId) {
+  return ensureAlignmentQuerySettings(readId).color;
+}
+
+function alignmentHitColor(dataOrHit) {
+  return alignmentQueryColor(alignmentQueryId(dataOrHit));
+}
+
+function showAlignmentHitBackground() {
+  const mode = dom.colorMode?.value;
+  return ["alignment", "read_path"].includes(mode)
+    && Boolean(dom.alignmentShowBackground?.checked);
+}
+
+function alignmentHitBackgroundColor(dataOrHit) {
+  return ALIGNMENT_HIT_BACKGROUND_COLOR;
+}
+
+function mixHexColor(hex, targetHex, amount) {
+  const source = hexToRgb(hex) || hexToRgb(ALIGNMENT_HIT_LINK_COLOR);
+  const target = hexToRgb(targetHex) || [251, 252, 248];
+  const ratio = clamp(Number(amount), 0, 1);
+  const rgb = source.map((value, index) => Math.round(value + (target[index] - value) * ratio));
+  return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+}
+
+function hexToRgb(hex) {
+  const match = String(hex || "").trim().match(/^#([0-9a-fA-F]{6})$/);
+  if (!match) return null;
+  const value = match[1];
+  return [
+    parseInt(value.slice(0, 2), 16),
+    parseInt(value.slice(2, 4), 16),
+    parseInt(value.slice(4, 6), 16),
+  ];
+}
+
 function showAlignmentVisualMode() {
   if (!dom.colorMode || !graphState) return;
   dom.colorMode.value = "read_path";
@@ -1211,6 +1812,7 @@ function showAlignmentVisualMode() {
 
 function updateServerSavePath() {
   if (!graphState || !dom.serverSavePath) return;
+  if (!isBackendExportFormat(dom.exportFormat?.value)) return;
   const sourceName = graphState.session?.source_name || "edited";
   if (!serverSavePathAuto && sourceName === serverSaveSourceName) return;
   serverSaveSourceName = sourceName;
@@ -1306,12 +1908,173 @@ async function mergeSelectedLink() {
   const body = path === "/api/merge_link"
     ? { edge_id: selection.edgeIds[0] }
     : { node_ids: selection.nodeIds, edge_ids: selection.edgeIds };
-  const payload = await postJsonAction(path, body, "Merge complete");
-  const details = latestHistoryDetails(payload, path === "/api/merge_link" ? "merge_link" : "merge_selection");
-  if (details?.new_node_id) {
-    pendingSelectNodeId = details.new_node_id;
-    selectGraphNode(details.new_node_id);
+  const layoutSnapshot = captureMergeLayoutSnapshot();
+  try {
+    setStatus("Updating graph...");
+    const response = await fetch(path, {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const payload = await response.json();
+    const details = latestHistoryDetails(payload, path === "/api/merge_link" ? "merge_link" : "merge_selection");
+    pendingMergeLayout = details?.new_node_id ? { snapshot: layoutSnapshot, details } : null;
+    renderGraph(payload, { relayout: false });
+    showToast("Merge complete");
+    setStatus("Merge complete");
+    if (details?.new_node_id) {
+      pendingSelectNodeId = details.new_node_id;
+      selectGraphNode(details.new_node_id, { fit: false });
+    }
+  } catch (error) {
+    pendingMergeLayout = null;
+    setStatus(error.message);
+    showToast(error.message);
   }
+}
+
+function captureMergeLayoutSnapshot() {
+  const cyPositions = new Map();
+  if (cy) {
+    cy.nodes().forEach((node) => {
+      cyPositions.set(node.id(), { ...node.position() });
+    });
+  }
+  const bandageNodes = new Map();
+  getClientNodes().forEach((node) => {
+    const geometry = getGlyphGeometry(node.id);
+    if (geometry?.points?.length) {
+      bandageNodes.set(node.id, geometry.points.map((point) => ({ x: point.x, y: point.y })));
+      return;
+    }
+    const state = bandageState.nodes.get(node.id);
+    if (state?.minus && state?.plus) {
+      bandageNodes.set(node.id, [{ ...state.minus }, { ...state.plus }]);
+    }
+  });
+  const bandageLinks = new Map();
+  getClientEdges().forEach((edge) => {
+    const geometry = getLinkGeometry(edge);
+    if (geometry) {
+      bandageLinks.set(edge.id, quadraticSamplePoints(geometry.source, geometry.control, geometry.target, 10));
+    }
+  });
+  return { cyPositions, bandageNodes, bandageLinks };
+}
+
+function mergePathNodeIds(details) {
+  const ids = details?.path_node_ids || details?.node_ids || [details?.source_node_id, details?.target_node_id];
+  return (ids || []).filter(Boolean);
+}
+
+function mergePathEdgeIds(details) {
+  const ids = details?.path_edge_ids || details?.edge_ids || [details?.edge_id];
+  return (ids || []).filter(Boolean);
+}
+
+function mergedCytoscapePosition(nodeId) {
+  if (!pendingMergeLayout || pendingMergeLayout.details?.new_node_id !== nodeId) return null;
+  const points = mergePathNodeIds(pendingMergeLayout.details)
+    .map((id) => pendingMergeLayout.snapshot.cyPositions.get(id))
+    .filter(Boolean);
+  return points.length ? averagePoints(points) : null;
+}
+
+function mergedBandageState(node) {
+  if (!pendingMergeLayout || pendingMergeLayout.details?.new_node_id !== node.id) return null;
+  const pathPoints = mergedBandagePathPoints(pendingMergeLayout.details, pendingMergeLayout.snapshot);
+  if (pathPoints.length < 2) return null;
+  const config = getBandageModeConfig();
+  const targetLength = getBandageGlyphLength(node);
+  const pointCount = config.flexibleGlyphs ? getNativePolylinePointCount(targetLength, config) : 2;
+  const points = resamplePolylinePoints(pathPoints, Math.max(2, pointCount));
+  const state = {
+    x: 0,
+    y: 0,
+    angle: 0,
+    bend: 0,
+    minus: points[0],
+    plus: points[points.length - 1],
+    points,
+  };
+  const center = averagePoints(points);
+  state.x = center.x;
+  state.y = center.y;
+  state.angle = Math.atan2(state.plus.y - state.minus.y, state.plus.x - state.minus.x);
+  return state;
+}
+
+function mergedBandagePathPoints(details, snapshot) {
+  const points = [];
+  const nodeIds = mergePathNodeIds(details);
+  const edgeIds = mergePathEdgeIds(details);
+  nodeIds.forEach((nodeId, index) => {
+    appendNearestPolyline(points, snapshot.bandageNodes.get(nodeId));
+    appendNearestPolyline(points, snapshot.bandageLinks.get(edgeIds[index]));
+  });
+  return dedupePolylinePoints(points);
+}
+
+function appendNearestPolyline(target, source) {
+  if (!source?.length) return;
+  const candidate = source.map((point) => ({ x: point.x, y: point.y }));
+  if (!target.length) {
+    target.push(...candidate);
+    return;
+  }
+  const last = target[target.length - 1];
+  if (pointDistance(last, candidate[candidate.length - 1]) < pointDistance(last, candidate[0])) {
+    candidate.reverse();
+  }
+  target.push(...candidate);
+}
+
+function dedupePolylinePoints(points) {
+  const result = [];
+  points.forEach((point) => {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+    const previous = result[result.length - 1];
+    if (!previous || pointDistance(previous, point) > 0.5) {
+      result.push({ x: point.x, y: point.y });
+    }
+  });
+  return result;
+}
+
+function resamplePolylinePoints(points, targetCount) {
+  const clean = dedupePolylinePoints(points);
+  if (clean.length <= 2 || targetCount <= 2) {
+    return clean.length >= 2 ? [clean[0], clean[clean.length - 1]] : clean;
+  }
+  const distances = [0];
+  for (let index = 1; index < clean.length; index += 1) {
+    distances.push(distances[index - 1] + pointDistance(clean[index - 1], clean[index]));
+  }
+  const total = distances[distances.length - 1];
+  if (total <= 0) return clean.slice(0, targetCount);
+  const result = [];
+  for (let index = 0; index < targetCount; index += 1) {
+    const targetDistance = (total * index) / Math.max(targetCount - 1, 1);
+    let segmentIndex = 1;
+    while (segmentIndex < distances.length - 1 && distances[segmentIndex] < targetDistance) {
+      segmentIndex += 1;
+    }
+    const startDistance = distances[segmentIndex - 1];
+    const endDistance = distances[segmentIndex];
+    const ratio = endDistance === startDistance ? 0 : (targetDistance - startDistance) / (endDistance - startDistance);
+    const start = clean[segmentIndex - 1];
+    const end = clean[segmentIndex];
+    result.push({ x: start.x + (end.x - start.x) * ratio, y: start.y + (end.y - start.y) * ratio });
+  }
+  return result;
+}
+
+function pointDistance(a, b) {
+  if (!a || !b) return Infinity;
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 async function rotateSelectedCircularStart() {
@@ -1355,8 +2118,12 @@ async function callAndRender(path, options) {
       const error = await readError(response);
       throw new Error(error);
     }
+    const previousPayload = graphState;
     const payload = await response.json();
-    renderGraph(payload, { relayout: options.relayout ?? true });
+    const relayout = typeof options.relayout === "function"
+      ? options.relayout(payload, previousPayload)
+      : options.relayout ?? true;
+    renderGraph(payload, { relayout });
     showToast(options.success || "Done");
     setStatus(options.success || "Ready");
     return payload;
@@ -1393,6 +2160,7 @@ function renderGraph(payload, options = {}) {
   updateServerSavePath();
   updateAlignmentCommandPreview();
   updateAlignmentReadSelect(payload.session?.alignment);
+  renderAlignmentQueryControls(payload.session?.alignment);
 
   const elements = [
     ...payload.nodes.map((node) => ({ data: enrichNodeData(node.data, payload.stats) })),
@@ -1430,6 +2198,7 @@ function renderGraph(payload, options = {}) {
   }
   pendingRename = null;
   pendingDuplicateSource = null;
+  pendingMergeLayout = null;
 }
 
 function syncGraphElements(elements, relayout) {
@@ -1461,8 +2230,11 @@ function syncGraphElements(elements, relayout) {
       const sourcePosition = pendingDuplicateSource
         ? previousPositions.get(pendingDuplicateSource)
         : null;
+      const mergePosition = mergedCytoscapePosition(element.data.id);
       if (renamePosition) {
         added.position(renamePosition);
+      } else if (mergePosition) {
+        added.position(mergePosition);
       } else if (sourcePosition) {
         added.position({ x: sourcePosition.x + 42, y: sourcePosition.y + 42 });
       }
@@ -1534,13 +2306,13 @@ function enrichNodeData(data, stats) {
   return {
     ...data,
     renderLabel: buildNodeLabel(data),
-    renderColor: chooseNodeColor(data, stats),
+    renderColor: chooseNodeColor(data, stats, "cytoscape"),
     renderWidth: isBandage ? data.bandageWidth : data.size * circleScale,
     renderHeight: isBandage ? nodeWidth : data.size * circleScale,
     shape: isBandage ? "rectangle" : "ellipse",
     textOutlineWidth: dom.textOutline?.checked ? 2 : 0,
     blastBorderWidth: data.blastBest ? 3 : 1,
-    blastBorderColor: data.blastBest ? ALIGNMENT_HIT_BORDER_COLOR : "rgba(31, 37, 33, 0.18)",
+    blastBorderColor: alignmentDataHasVisibleHit(data) ? alignmentHitColor(data) : "rgba(31, 37, 33, 0.18)",
   };
 }
 
@@ -1551,7 +2323,7 @@ function enrichEdgeData(data) {
     ...data,
     baseWidth,
     width,
-    renderColor: chooseEdgeColor(data),
+    renderColor: chooseEdgeColor(data, "cytoscape"),
     renderLabel: dom.showLinkLabels?.checked ? data.customLabel || data.label || "" : "",
   };
 }
@@ -1572,7 +2344,7 @@ function displayEdgeWidth(edge) {
   return Math.max(0.6, Number(edge?.baseWidth || edge?.width || 2) * displayLinkWidthScale());
 }
 
-function chooseNodeColor(data, stats) {
+function chooseNodeColor(data, stats, renderer = "cytoscape") {
   if (data.customColor) return data.customColor;
   const mode = dom.colorMode.value;
   if (mode === "random") {
@@ -1582,10 +2354,30 @@ function chooseNodeColor(data, stats) {
     return randomColorById.get(data.id);
   }
   if (mode === "alignment") {
-    return data.blastBest ? ALIGNMENT_HIT_NODE_COLOR : ALIGNMENT_UNHIT_NODE_COLOR;
+    if (alignmentDataHasVisibleHit(data)) {
+      if (renderer === "bandage") {
+        return showAlignmentHitBackground() && alignmentDataShowsHitBackground(data)
+          ? alignmentHitBackgroundColor(data)
+          : visibleAlignmentSpans(data).length
+            ? ALIGNMENT_UNHIT_NODE_COLOR
+            : alignmentHitColor(data);
+      }
+      return alignmentHitColor(data);
+    }
+    return ALIGNMENT_UNHIT_NODE_COLOR;
   }
   if (mode === "read_path") {
-    return data.blastHitCount ? ALIGNMENT_HIT_NODE_COLOR : ALIGNMENT_UNHIT_NODE_COLOR;
+    if (alignmentDataHasVisibleHit(data)) {
+      if (renderer === "bandage") {
+        return showAlignmentHitBackground() && alignmentDataShowsHitBackground(data)
+          ? alignmentHitBackgroundColor(data)
+          : visibleAlignmentSpans(data).length
+            ? ALIGNMENT_UNHIT_NODE_COLOR
+            : alignmentHitColor(data);
+      }
+      return alignmentHitColor(data);
+    }
+    return ALIGNMENT_UNHIT_NODE_COLOR;
   }
   if (mode === "degree") {
     const maxDegree = Math.max(...(graphState?.nodes || []).map((node) => node.data.degree || 0), 1);
@@ -1595,14 +2387,14 @@ function chooseNodeColor(data, stats) {
   return data.color || "#dbe1d4";
 }
 
-function chooseEdgeColor(data) {
+function chooseEdgeColor(data, renderer = "cytoscape") {
   if (data.customColor) return data.customColor;
   const mode = dom.colorMode.value;
   if (mode === "alignment") {
-    return data.blastBest ? ALIGNMENT_HIT_LINK_COLOR : ALIGNMENT_UNHIT_LINK_COLOR;
+    return alignmentDataHasVisibleHit(data) ? alignmentHitColor(data) : ALIGNMENT_UNHIT_LINK_COLOR;
   }
   if (mode === "read_path") {
-    return data.blastHitCount ? ALIGNMENT_HIT_LINK_COLOR : ALIGNMENT_UNHIT_LINK_COLOR;
+    return alignmentDataHasVisibleHit(data) ? alignmentHitColor(data) : ALIGNMENT_UNHIT_LINK_COLOR;
   }
   return data.customColor || "#9ba797";
 }
@@ -1960,7 +2752,8 @@ function updateSelectionButtons(selected) {
   dom.deleteAllSelectedButton.disabled = !hasGraph || !selectedCount;
   dom.duplicateNodeButton.disabled = !hasGraph || !selected || !isNode;
   dom.mergeLinkButton.disabled = !canMergeCurrentSelection();
-  dom.exportSelectedButton.disabled = !hasGraph || !selection.edgeIds.length;
+  dom.exportSelectedButton.disabled = !hasGraph
+    || (dom.exportFormat?.value === "svg" ? !selectedCount : !selection.edgeIds.length);
   dom.rotateCircularButton.disabled = !hasGraph || !selected || !isNode;
   updateRepeatResolutionButtons();
 }
@@ -2102,14 +2895,15 @@ async function runRepeatResolution(strategy) {
   }
 }
 
-function selectGraphNode(nodeId) {
+function selectGraphNode(nodeId, options = {}) {
   if (!nodeId || !graphState) return;
+  const shouldFit = options.fit !== false;
   if (cy) {
     const node = cy.getElementById(nodeId);
     if (node.length) {
       cy.elements().unselect();
       node.select();
-      if (!isBandageMode()) {
+      if (shouldFit && !isBandageMode()) {
         cy.fit(node, 100);
       }
     }
@@ -2127,6 +2921,7 @@ function updateGlobalButtons(session) {
   dom.redoButton.disabled = !session?.can_redo;
   dom.exportButton.disabled = !hasGraph;
   dom.quickExportButton.disabled = !hasGraph;
+  dom.exportSvgButton.disabled = !hasGraph;
   dom.exportSelectedButton.disabled = true;
   dom.exportHistoryButton.disabled = !hasGraph;
   dom.fitButton.disabled = !hasGraph;
@@ -2134,7 +2929,8 @@ function updateGlobalButtons(session) {
   dom.findNodeButton.disabled = !hasGraph;
   dom.drawGraphButton.disabled = !hasGraph;
   dom.drawGraphToolbarButton.disabled = !hasGraph;
-  dom.serverSaveButton.disabled = !hasGraph;
+  dom.serverSaveButton.disabled = !hasGraph || !isBackendExportFormat(dom.exportFormat?.value);
+  updateServerFileButtons();
   updateHistoryFileButtons();
   updateSftpButtons();
   updateAlignmentButtons();
@@ -2373,6 +3169,12 @@ function syncBandageNodeStore() {
     const existingState = bandageState.nodes.get(node.id);
     if (existingState) {
       ensureEndpointState(node, existingState);
+      return;
+    }
+    const mergeState = mergedBandageState(node);
+    if (mergeState) {
+      bandageState.nodes.set(node.id, mergeState);
+      syncCytoscapePosition(node.id, mergeState);
       return;
     }
     const sourceState = pendingDuplicateSource ? bandageState.nodes.get(pendingDuplicateSource) : null;
@@ -3665,7 +4467,7 @@ function renderBandageSvg() {
       svgEl("path", {
         class: "bandage-contig-path",
         d: geometry.path,
-        stroke: chooseNodeColor(node, graphState.stats),
+        stroke: chooseNodeColor(node, graphState.stats, "bandage"),
         "stroke-width": geometry.width,
       }),
     );
@@ -3681,7 +4483,7 @@ function renderBandageSvg() {
 }
 
 function appendBandageAlignmentSpans(group, node, geometry) {
-  const spans = Array.isArray(node.alignmentSpans) ? node.alignmentSpans : [];
+  const spans = visibleAlignmentSpans(node);
   const nodeLength = Number(node.length || 0);
   if (!spans.length || !nodeLength || !geometry.points?.length) return;
   const maxSpans = 40;
@@ -3695,10 +4497,13 @@ function appendBandageAlignmentSpans(group, node, geometry) {
     if (spanPoints.length < 2) return;
     const path = polylinePath(spanPoints);
     const blockWidth = Math.max(5, geometry.width + 1.5);
+    const color = alignmentQueryColor(span.qseqid || "__alignment__");
     group.appendChild(
       svgEl("path", {
         class: "bandage-query-hit-block",
         d: path,
+        stroke: color,
+        style: `stroke: ${color}`,
         "stroke-width": blockWidth,
         "data-read": span.qseqid || "",
       }),
@@ -5099,6 +5904,9 @@ function renderHistory(session) {
   const traceItems = session.history_trace || [];
   const activeTraceIndex = session.history_trace_index;
   const activeStepCount = Number(session.edit_step_count || 0);
+  const activeOperationStateIndex = Number.isInteger(session.operation_state_index)
+    ? session.operation_state_index
+    : null;
   const items = traceItems.length
     ? traceItems.map((item, index) => ({ ...item, displayIndex: index })).reverse()
     : (session.history || []).map((item, index) => ({ ...item, displayIndex: index })).reverse().slice(0, 12);
@@ -5112,6 +5920,7 @@ function renderHistory(session) {
   dom.historyList.replaceChildren(
     ...items.map((item) => {
       const canRestore = Number.isInteger(item.trace_index);
+      const canRestoreOperation = !canRestore && Number.isInteger(item.state_index);
       const editStepCount = item.details?.edit_step_count;
       const stepNumber = item.displayIndex + 1;
       const traceStepNumber = Number.isInteger(item.details?.step) ? item.details.step : item.trace_index;
@@ -5121,7 +5930,11 @@ function renderHistory(session) {
       row.classList.toggle("future", isFuture);
       row.classList.toggle(
         "active",
-        canRestore ? item.trace_index === activeTraceIndex : Number.isInteger(editStepCount) && editStepCount === activeStepCount && activeStepCount > 0,
+        canRestore
+          ? item.trace_index === activeTraceIndex
+          : canRestoreOperation
+            ? item.state_index === activeOperationStateIndex
+            : Number.isInteger(editStepCount) && editStepCount === activeStepCount && activeStepCount > 0,
       );
       row.addEventListener("click", () => row.classList.toggle("expanded"));
 
@@ -5135,7 +5948,27 @@ function renderHistory(session) {
         });
       }
 
-      if (!canRestore && Number.isInteger(editStepCount) && editStepCount > 0) {
+      if (canRestoreOperation) {
+        const nav = document.createElement("div");
+        nav.className = "history-nav";
+        const before = document.createElement("button");
+        before.type = "button";
+        before.textContent = "before";
+        before.disabled = item.state_index <= 0;
+        before.addEventListener("click", (event) => {
+          event.stopPropagation();
+          restoreOperationState(Math.max(0, item.state_index - 1), `Moved before ${item.action}`);
+        });
+        const after = document.createElement("button");
+        after.type = "button";
+        after.textContent = "after";
+        after.addEventListener("click", (event) => {
+          event.stopPropagation();
+          restoreOperationState(item.state_index, `Moved after ${item.action}`);
+        });
+        nav.append(before, after);
+        header.appendChild(nav);
+      } else if (!canRestore && Number.isInteger(editStepCount) && editStepCount > 0) {
         const nav = document.createElement("div");
         nav.className = "history-nav";
         const before = document.createElement("button");

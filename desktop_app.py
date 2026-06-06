@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contributors
+
 from __future__ import annotations
 
 import os
@@ -169,7 +172,7 @@ def run_embedded_webview(url: str, server) -> None:
 
     api = DesktopApi()
     window = webview.create_window(
-        "GFA Editor v1.1",
+        "GFA Editor v1.2",
         url,
         width=1440,
         height=920,

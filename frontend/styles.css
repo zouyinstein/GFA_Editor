@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contributors */
+
 :root {
   color-scheme: light;
   --bg: #f4f6f1;
@@ -63,14 +66,14 @@ button {
   gap: 12px;
 }
 
-.brand-mark {
+.brand-icon {
   width: 34px;
   height: 34px;
+  display: block;
   border-radius: 7px;
-  background:
-    linear-gradient(135deg, transparent 44%, rgba(255, 255, 255, 0.7) 45% 54%, transparent 55%),
-    linear-gradient(135deg, #2f7d76, #b8563d);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.12),
+    0 1px 3px rgba(34, 42, 32, 0.12);
 }
 
 h1,
@@ -300,6 +303,15 @@ h2 {
   color: var(--muted);
 }
 
+.compact-check {
+  min-height: 26px;
+  font-size: 12px;
+}
+
+.check-row.is-disabled {
+  opacity: 0.55;
+}
+
 .radio-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -493,6 +505,50 @@ button svg,
   min-width: 0;
 }
 
+.graph-toolbar button {
+  position: relative;
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease,
+    background-color 0.14s ease;
+}
+
+.graph-toolbar button[data-tooltip]:hover:not(:disabled),
+.graph-toolbar button[data-tooltip]:focus-visible:not(:disabled) {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(63, 103, 177, 0.18);
+}
+
+.graph-toolbar button[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 30;
+  max-width: 220px;
+  padding: 5px 8px;
+  border: 1px solid rgba(31, 37, 33, 0.12);
+  border-radius: 5px;
+  color: #ffffff;
+  background: rgba(31, 37, 33, 0.92);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+
+.graph-toolbar button[data-tooltip]:hover:not(:disabled)::after,
+.graph-toolbar button[data-tooltip]:focus-visible:not(:disabled)::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .graph-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -611,6 +667,10 @@ button svg,
   background: #eef2e9;
 }
 
+.layout-mode-group {
+  overflow: visible;
+}
+
 .segmented button {
   min-width: 56px;
   min-height: 30px;
@@ -633,6 +693,7 @@ button svg,
   min-width: 40px;
   min-height: 34px;
   padding: 0;
+  border: 1px solid transparent;
 }
 
 .layout-mode-icon {
@@ -788,7 +849,6 @@ button svg,
 
 .bandage-query-hit-block {
   fill: none;
-  stroke: rgba(132, 33, 70, 0.94);
   stroke-linecap: butt;
   stroke-linejoin: round;
   pointer-events: none;
@@ -1085,6 +1145,63 @@ button svg,
 
 .advanced-tools[open] summary {
   margin-bottom: 8px;
+}
+
+.alignment-query-tools {
+  gap: 6px;
+}
+
+.alignment-query-list {
+  display: grid;
+  gap: 6px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.alignment-query-item {
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 5px 7px;
+  border: 1px solid #edf0e8;
+  border-radius: 6px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.alignment-query-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.alignment-query-item input[type="color"] {
+  width: 30px;
+  height: 22px;
+  min-height: 22px;
+  padding: 1px 2px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+.alignment-query-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alignment-query-empty {
+  padding: 6px 7px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .history-list {

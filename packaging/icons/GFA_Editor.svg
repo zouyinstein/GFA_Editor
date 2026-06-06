@@ -1,20 +1,3 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <rect x="56" y="48" width="912" height="912" rx="224" fill="#f7faf7"/>
-  <path d="M56 520h912M56 660h912M56 800h912M224 48v912M384 48v912M544 48v912M704 48v912M864 48v912" stroke="#cfd8d1" stroke-opacity=".32" stroke-width="4"/>
-  <g stroke="#8e9b8f" stroke-width="28" stroke-linecap="round" stroke-opacity=".74" fill="none">
-    <path d="M266 256L553 317"/>
-    <path d="M266 256L368 584"/>
-    <path d="M553 317L368 584"/>
-    <path d="M368 584L694 635"/>
-    <path d="M694 635L553 317"/>
-    <path d="M368 584L461 819"/>
-    <path d="M461 819L694 635"/>
-  </g>
-  <g stroke="#181d1a" stroke-width="18">
-    <circle cx="266" cy="256" r="102" fill="#3848f4"/>
-    <circle cx="553" cy="317" r="90" fill="#cd3ac2"/>
-    <circle cx="368" cy="584" r="92" fill="#0ac58b"/>
-    <circle cx="694" cy="635" r="84" fill="#4bca4a"/>
-    <circle cx="461" cy="819" r="78" fill="#a5d534"/>
-  </g>
+  <image href="ico_256.png" x="0" y="0" width="1024" height="1024" preserveAspectRatio="xMidYMid meet"/>
 </svg>

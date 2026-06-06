@@ -1,0 +1,15 @@
+GFA Editor
+Copyright (C) 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contributors.
+
+Project source code is licensed under the GNU Affero General Public
+License, version 3 or later (AGPL-3.0-or-later). See LICENSE.
+
+SPDX-License-Identifier: AGPL-3.0-or-later
+
+This license notice applies to the project source code unless a file
+states a different license. Third-party files bundled under
+frontend/vendor retain their original licenses and copyright notices.
+
+The GFA Editor name, app icon, logos, and other project branding are
+not licensed as trademarks or service marks. You may use them only to
+identify this project or as otherwise permitted by law.

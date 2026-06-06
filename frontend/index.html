@@ -1,22 +1,26 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contributors
+-->
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GFA Editor v1.1</title>
-    <link rel="stylesheet" href="/styles.css?v=20260606-layout-icons" />
+    <title>GFA Editor v1.2</title>
+    <link rel="stylesheet" href="/styles.css?v=20260606-v12-docs" />
     <script src="/vendor/cytoscape.min.js"></script>
     <script src="/vendor/d3.min.js"></script>
     <script src="/vendor/lucide.min.js"></script>
-    <script src="/app.js?v=20260606-layout-icons" defer></script>
+    <script src="/app.js?v=20260606-v12-docs" defer></script>
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <div class="brand">
-          <span class="brand-mark"></span>
+          <img class="brand-icon" src="/app-icon.png" alt="" />
           <div>
-            <h1>GFA Editor v1.1</h1>
+            <h1>GFA Editor v1.2</h1>
             <span id="source-name">No GFA loaded</span>
           </div>
         </div>
@@ -91,6 +95,14 @@
                 <option value="__all__">All reads</option>
               </select>
             </label>
+            <label class="check-row compact-check">
+              <input id="alignment-show-background" type="checkbox" checked />
+              <span>Light hit background</span>
+            </label>
+            <details class="advanced-tools alignment-query-tools">
+              <summary>Query colours</summary>
+              <div id="alignment-query-list" class="alignment-query-list"></div>
+            </details>
             <details class="advanced-tools">
               <summary>Advanced</summary>
               <div class="stack compact-stack">
@@ -409,10 +421,14 @@
                   <select id="export-format">
                     <option value="gfa">GFA</option>
                     <option value="fasta">FASTA</option>
+                    <option value="svg">SVG image</option>
                   </select>
                 </label>
                 <button id="export-button" class="primary-button full" type="button" title="Choose export path and filename" disabled>
                   <i data-lucide="folder-down"></i><span>Save graph...</span>
+                </button>
+                <button id="export-svg-button" class="tool-button full" type="button" title="Save current view as SVG" disabled>
+                  <i data-lucide="image-down"></i><span>Save SVG view...</span>
                 </button>
                 <div class="button-row">
                   <button id="export-selected-button" class="tool-button" type="button" title="Export selected links" disabled>

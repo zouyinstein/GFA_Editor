@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contributors
+
 from __future__ import annotations
 
 import copy
@@ -683,7 +686,6 @@ def merge_link(
         merged_segments[segment_id] = segment
     graph.segments = merged_segments
     graph.links = rewired_links
-    renumber_links(graph)
     return {
         "edge_id": edge_id,
         "source_node_id": source_id,
@@ -789,7 +791,6 @@ def merge_selection(
         _replace_link_endpoint(retained_cycle_link_copy, path_node_ids[0], current_node_id, "-")
         _replace_link_endpoint(retained_cycle_link_copy, path_node_ids[-1], current_node_id, "+")
         graph.links.append(retained_cycle_link_copy)
-        renumber_links(graph)
         retained_edge_ids = [retained_cycle_link_copy.id]
 
     return {

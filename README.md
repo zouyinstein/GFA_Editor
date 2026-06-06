@@ -1,66 +1,106 @@
-# GFA Editor v1.1
+<p align="center">
+  <img src="frontend/app-icon.png" alt="GFA Editor app icon" width="96">
+</p>
 
-Bandage-style GFA graph viewer and editor for local use. It supports graph drawing, basic GFA editing, GFA/FASTA export, read/alignment visualization, and local file management.
+# GFA Editor v1.2
 
-Data stays on the local machine unless a custom server directory or SFTP transfer is configured.
+GFA Editor 是一个本地运行的 Bandage 风格 GFA 图查看和编辑工具。它支持 Cose、Band、Twin 三种视图，支持图编辑、alignment 可视化、本地/服务器文件管理，以及 GFA、FASTA、SVG 导出。
 
-## Quick Start
+除非你主动配置服务器目录或使用 SFTP 传输，数据都保留在本机。
 
-Install the local environment:
+## License
+
+GFA Editor 项目源码采用 **GNU Affero General Public License v3.0 or later** 授权，SPDX 标识为 `AGPL-3.0-or-later`。完整条款见 [LICENSE](LICENSE)，版权与第三方依赖说明见 [NOTICE](NOTICE)。
+
+这意味着后续 fork、修改版或重新发布版本不能移除原始代码已有的 AGPL 授权义务；如果分发修改版，或以网络服务形式提供修改版，应按 AGPL 提供对应源码。第三方 vendor 文件保留其自身许可证。
+
+## 快速启动
 
 ```bash
 cd "/path/to/GFA_Editor"
 scripts/setup_local_dev.sh
-```
-
-Start the app:
-
-```bash
 scripts/start_local.sh
 ```
 
-Open:
+打开：
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Stop the background service:
+停止服务：
 
 ```bash
 scripts/stop_local.sh
 ```
 
-Use another port when `8000` is busy:
+如果 `8000` 端口被占用，可以换一个端口：
 
 ```bash
 GFA_EDITOR_PORT=8010 scripts/start_local.sh
-```
-
-If startup says the port is already in use but `/api/health` does not answer, first try stopping a GFA Editor server on that port:
-
-```bash
-scripts/stop_local.sh
-```
-
-For a custom port, pass the same port to the stop script:
-
-```bash
 GFA_EDITOR_PORT=8010 scripts/stop_local.sh
 ```
 
-If the port is still occupied by another local process, find and stop it manually:
+如果启动时提示端口已占用，但 `/api/health` 没有响应，说明可能是其他本地进程占用了端口。查找并关闭：
 
 ```bash
 lsof -nP -iTCP:8000 -sTCP:LISTEN
 kill <PID>
 ```
 
-Replace `8000` with your port. If you do not want to stop that process, start GFA Editor on a free port instead:
+把 `8000` 替换成实际端口。如果不想关闭该进程，就换一个空闲端口启动 GFA Editor。
+
+## 简要使用说明
+
+1. 在左侧 Import 面板选择 `.gfa` 文件，点击 Load；也可以从顶部 Files 按钮打开服务器目录中的文件。
+2. 顶部 Cose、Band、Twin 按钮用于切换三种可视化模式。
+3. Display、Filters、Drawing、Labels、Files 用于调整显示、过滤、绘图范围、标签和文件来源。
+4. 在图中选择 contig 或 link 后，在右侧 Inspector 中查看和编辑属性。
+5. 顶部工具按钮支持 Undo、Redo、Delete、Delete All Selected、Duplicate、Merge、Rotate 和 Repeat resolution。
+6. 左侧 Alignments 面板可以运行或导入比对结果，并用 `f`、`b` 和颜色按钮控制每条 query 的显示。
+7. 顶部右侧导出按钮支持 GFA、FASTA、SVG 当前视图、selected 子图和 edit history JSON。
+
+详细工具说明见 [doc/user_manual.md](doc/user_manual.md)。
+
+## 桌面 App
+
+安装桌面依赖：
 
 ```bash
-GFA_EDITOR_PORT=8011 scripts/start_local.sh
+scripts/setup_local_dev.sh --desktop
 ```
+
+运行桌面封装：
+
+```bash
+scripts/run_desktop.sh
+```
+
+为当前平台打包：
+
+```bash
+scripts/build_desktop_app.sh
+```
+
+macOS 输出：
+
+```text
+dist/GFA_Editor.app
+```
+
+Windows 11 x86_64 打包：
+
+```powershell
+scripts\build_windows_exe.ps1
+```
+
+Windows 输出：
+
+```text
+dist\GFA_Editor\GFA_Editor.exe
+```
+
+Windows 分发时需要分享整个 `dist\GFA_Editor` 文件夹，不要只复制 `.exe`。
 
 ## Conda
 
@@ -70,219 +110,52 @@ conda activate gfa-editor
 scripts/start_local.sh
 ```
 
-The conda environment includes Python dependencies, `minimap2`, and BLAST.
+Conda 环境包含 Python 依赖、`minimap2` 和 BLAST。
 
 ## Docker
 
-On macOS, Docker requires Docker Desktop or Colima in addition to the Docker CLI.
-
-Colima setup:
-
-```bash
-brew install colima
-colima start --arch aarch64 --cpu 2 --memory 4 --disk 20
-docker context use colima
-```
-
-Build:
-
 ```bash
 docker build -t gfa-editor .
+docker run --rm -p 8000:8000 -v "$PWD/server_data:/data/gfa-editor" gfa-editor
 ```
 
-Run:
-
-```bash
-docker run --rm \
-  -p 8000:8000 \
-  -v "$PWD/server_data:/data/gfa-editor" \
-  gfa-editor
-```
-
-Open:
+打开：
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Alternative host port:
+## Alignment 工具
 
-```bash
-docker run --rm \
-  -p 8015:8000 \
-  -v "$PWD/server_data:/data/gfa-editor" \
-  gfa-editor
-```
-
-Open:
-
-```text
-http://127.0.0.1:8015
-```
-
-## Desktop App
-
-Install desktop dependencies:
-
-```bash
-scripts/setup_local_dev.sh --desktop
-```
-
-Run the desktop wrapper:
-
-```bash
-scripts/run_desktop.sh
-```
-
-Build the desktop app for the current platform:
-
-```bash
-scripts/build_desktop_app.sh
-```
-
-macOS output:
-
-```text
-dist/GFA_Editor.app
-```
-
-Windows 11 x86_64 build:
-
-```powershell
-scripts\build_windows_exe.ps1
-```
-
-Windows output:
-
-```text
-dist\GFA_Editor\GFA_Editor.exe
-```
-
-Share the whole `dist\GFA_Editor` folder on Windows. The folder contains the executable, Python runtime, frontend files, and bundled alignment tools.
-
-The desktop wrapper opens an embedded WebView by default. If WebView fails on the current macOS environment, it opens the same local app in the system browser. Logs are written to:
-
-```text
-~/GFAEditorData/desktop.log
-```
-
-Force browser mode:
-
-```bash
-GFA_EDITOR_DESKTOP_MODE=browser scripts/run_desktop.sh
-```
-
-## macOS Gatekeeper
-
-Unsigned local builds may show:
-
-```text
-Apple could not verify "GFA_Editor" is free of malware
-```
-
-Open a trusted local build with:
-
-```text
-Right click GFA_Editor.app -> Open -> Open
-```
-
-Or clear the quarantine flag:
-
-```bash
-scripts/macos_clear_quarantine.sh dist/GFA_Editor.app
-```
-
-Public macOS releases should be signed with Apple Developer ID and notarized.
-
-## Quasi-Standalone Package
-
-Build:
-
-```bash
-scripts/build_quasi_standalone.sh
-```
-
-Example output:
-
-```text
-dist/gfa-editor-local-macos-arm64/
-```
-
-Run inside the package:
-
-```bash
-./start.sh
-```
-
-macOS can also open:
-
-```text
-start.command
-```
-
-The package includes the project files, a local Python environment, start/stop scripts, and collected `minimap2` / `blastn` executables for the current platform.
-
-## Alignment Tools
-
-Run alignment requires:
-
-```text
-minimap2
-blastn
-```
-
-Install with conda:
+运行 alignment 需要 `minimap2` 或 `blastn`。可用 conda 安装：
 
 ```bash
 conda install -c bioconda minimap2 blast
 ```
 
-Collect tools for desktop or standalone packaging:
+为桌面版或 standalone 包收集工具：
 
 ```bash
 scripts/collect_alignment_tools.sh
 ```
 
-Collected tools are stored under:
-
-```text
-packaging/bin/<platform>/
-```
-
-## Example Data
-
-Example GFA:
+## 示例数据
 
 ```text
 examples/mecat_mito_500K_before_rr.gfa
-```
-
-Simulated reads and PAF files:
-
-```text
 examples/simulated_reads/
 ```
 
-`edge8_repeat_long_reads.*` covers repeat-path visualization around `edge_8`.
+## 数据目录
 
-`edge33_path_long_reads.*` covers partial edge hits and long reads crossing links.
-
-## Data Directory
-
-Default local data directory:
+默认本地数据目录：
 
 ```text
 server_data/
 ```
 
-Custom local data directory:
+自定义本地数据目录：
 
 ```bash
 GFA_EDITOR_DATA_DIR=/path/to/data scripts/start_local.sh
-```
-
-Docker data directory:
-
-```text
-/data/gfa-editor
 ```

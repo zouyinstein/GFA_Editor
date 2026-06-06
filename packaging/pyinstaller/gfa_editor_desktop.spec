@@ -15,6 +15,8 @@ bundle_icon = str(mac_icon) if mac_icon.exists() else None
 datas = [
     (str(project_root / "frontend"), "frontend"),
     (str(project_root / "examples"), "examples"),
+    (str(project_root / "LICENSE"), "."),
+    (str(project_root / "NOTICE"), "."),
 ]
 
 bin_root = project_root / "packaging" / "bin"
@@ -84,8 +86,8 @@ if sys.platform == "darwin":
         icon=bundle_icon,
         bundle_identifier="local.gfa-editor",
         info_plist={
-            "CFBundleShortVersionString": "1.1",
-            "CFBundleVersion": "1.1",
+            "CFBundleShortVersionString": "1.2",
+            "CFBundleVersion": "1.2",
             "NSHighResolutionCapable": True,
             "NSRequiresAquaSystemAppearance": False,
         },

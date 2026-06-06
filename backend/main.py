@@ -1,6 +1,10 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contributors
+
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import io
 import json
@@ -52,13 +56,30 @@ SERVER_DATA_DIR = Path(os.environ.get("GFA_EDITOR_DATA_DIR", ROOT_DIR / "server_
 SERVER_FILE_EXTENSIONS = {".gfa", ".txt"}
 
 
+@dataclass
+class SessionState:
+    graph: Optional[GfaGraph]
+    edit_steps: List[Dict[str, Any]]
+    source_name: Optional[str]
+    alignment_hits_by_query: Dict[str, List[Dict[str, Any]]]
+    alignment_format: Optional[str]
+    alignment_target_role: str
+    alignment_source_name: Optional[str]
+    alignment_selected_read_id: Optional[str]
+    alignment_last_command: Optional[str]
+    alignment_last_stderr: Optional[str]
+    active_operation_state_index: Optional[int]
+
+
 class EditorSession:
     def __init__(self) -> None:
         self.graph: Optional[GfaGraph] = None
-        self.undo_stack: List[Tuple[GfaGraph, List[Dict[str, Any]]]] = []
-        self.redo_stack: List[Tuple[GfaGraph, List[Dict[str, Any]]]] = []
+        self.undo_stack: List[SessionState] = []
+        self.redo_stack: List[SessionState] = []
         self.log: List[Dict[str, Any]] = []
         self.edit_steps: List[Dict[str, Any]] = []
+        self.operation_states: List[SessionState] = []
+        self.active_operation_state_index: Optional[int] = None
         self.history_trace_snapshots: List[Tuple[GfaGraph, List[Dict[str, Any]]]] = []
         self.history_trace: List[Dict[str, Any]] = []
         self.history_trace_index: Optional[int] = None
@@ -78,15 +99,19 @@ class EditorSession:
         return self.graph
 
     def load(self, graph: GfaGraph, source_name: str) -> Dict[str, Any]:
+        previous_state = self._capture_state() if self.graph is not None else None
         self.graph = graph
-        self.undo_stack.clear()
+        self.undo_stack = [previous_state] if previous_state is not None else []
         self.redo_stack.clear()
         self.edit_steps.clear()
         self._clear_history_trace()
         self._clear_alignment()
-        self.log = [self._event("upload", {"source_name": source_name, "edit_step_count": 0})]
+        self.log.clear()
+        self.operation_states.clear()
+        self.active_operation_state_index = None
         self.version = 1
         self.source_name = source_name
+        self._append_log("upload", {"source_name": source_name, "edit_step_count": 0})
         return self.snapshot()
 
     def snapshot(self, include_sequences: bool = False) -> Dict[str, Any]:
@@ -99,6 +124,7 @@ class EditorSession:
             "can_redo": bool(self.redo_stack),
             "edit_step_count": len(self.edit_steps),
             "history": self.log[-30:],
+            "operation_state_index": self.active_operation_state_index,
             "history_trace": self.history_trace,
             "history_trace_index": self.history_trace_index,
             "alignment": self.alignment_summary(),
@@ -107,19 +133,19 @@ class EditorSession:
 
     def mutate(self, action: str, details: Dict[str, Any], callback) -> Dict[str, Any]:
         graph = self.has_graph()
-        self.undo_stack.append((graph.clone(), copy.deepcopy(self.edit_steps)))
+        self.undo_stack.append(self._capture_state())
         self.redo_stack.clear()
         try:
             result = callback(graph)
         except Exception:
-            self.graph, self.edit_steps = self.undo_stack.pop()
+            self._restore_state(self.undo_stack.pop())
             raise
         event_details = {**details, **(result or {})}
         self._record_edit_step(action, event_details, result or {})
         event_details["edit_step_count"] = len(self.edit_steps)
         self.version += 1
-        self.log.append(self._event(action, event_details))
         self._refresh_alignment()
+        self._append_log(action, event_details)
         return self.snapshot()
 
     def apply_alignment(
@@ -133,26 +159,31 @@ class EditorSession:
         stderr: Optional[str] = None,
     ) -> Dict[str, Any]:
         self.has_graph()
-        self.alignment_hits_by_query = copy.deepcopy(hits_by_query)
-        self.alignment_format = format
-        self.alignment_target_role = target_role
-        self.alignment_source_name = source_name
-        self.alignment_selected_read_id = None
-        self.alignment_last_command = command
-        self.alignment_last_stderr = stderr
-        result = self._refresh_alignment()
+        self.undo_stack.append(self._capture_state())
+        self.redo_stack.clear()
+        try:
+            self.alignment_hits_by_query = copy.deepcopy(hits_by_query)
+            self.alignment_format = format
+            self.alignment_target_role = target_role
+            self.alignment_source_name = source_name
+            self.alignment_selected_read_id = None
+            self.alignment_last_command = command
+            self.alignment_last_stderr = stderr
+            result = self._refresh_alignment()
+        except Exception:
+            self._restore_state(self.undo_stack.pop())
+            raise
         self.version += 1
-        self.log.append(
-            self._event(
-                "alignment",
-                {
-                    "source_name": source_name,
-                    "format": format,
-                    "target_role": target_role,
-                    "read_count": len(self.alignment_hits_by_query),
-                    **result,
-                },
-            )
+        self._append_log(
+            "alignment",
+            {
+                "source_name": source_name,
+                "format": format,
+                "target_role": target_role,
+                "read_count": len(self.alignment_hits_by_query),
+                "edit_step_count": len(self.edit_steps),
+                **result,
+            },
         )
         return self.snapshot()
 
@@ -232,8 +263,8 @@ class EditorSession:
             raise HTTPException(status_code=400, detail="Target step must be non-negative")
         reachable_steps = {
             len(self.edit_steps),
-            *[len(edit_steps) for _, edit_steps in self.undo_stack],
-            *[len(edit_steps) for _, edit_steps in self.redo_stack],
+            *[len(state.edit_steps) for state in self.undo_stack],
+            *[len(state.edit_steps) for state in self.redo_stack],
         }
         if target_step_count not in reachable_steps:
             raise HTTPException(status_code=409, detail="Target step is not reachable from undo/redo history")
@@ -244,24 +275,24 @@ class EditorSession:
         return self.snapshot()
 
     def _undo_once(self, record_log: bool) -> None:
-        graph = self.has_graph()
+        self.has_graph()
         if not self.undo_stack:
             raise HTTPException(status_code=409, detail="Nothing to undo")
-        self.redo_stack.append((graph.clone(), copy.deepcopy(self.edit_steps)))
-        self.graph, self.edit_steps = self.undo_stack.pop()
+        self.redo_stack.append(self._capture_state())
+        self._restore_state(self.undo_stack.pop())
         self.version += 1
         if record_log:
-            self.log.append(self._event("undo", {"edit_step_count": len(self.edit_steps)}))
+            self._append_log("undo", {"edit_step_count": len(self.edit_steps)})
 
     def _redo_once(self, record_log: bool) -> None:
-        graph = self.has_graph()
+        self.has_graph()
         if not self.redo_stack:
             raise HTTPException(status_code=409, detail="Nothing to redo")
-        self.undo_stack.append((graph.clone(), copy.deepcopy(self.edit_steps)))
-        self.graph, self.edit_steps = self.redo_stack.pop()
+        self.undo_stack.append(self._capture_state())
+        self._restore_state(self.redo_stack.pop())
         self.version += 1
         if record_log:
-            self.log.append(self._event("redo", {"edit_step_count": len(self.edit_steps)}))
+            self._append_log("redo", {"edit_step_count": len(self.edit_steps)})
 
     def export_history(self) -> Dict[str, Any]:
         self.has_graph()
@@ -273,7 +304,7 @@ class EditorSession:
         if not isinstance(steps, list):
             raise ValueError("History file must contain a steps list")
 
-        self.undo_stack.append((graph.clone(), copy.deepcopy(self.edit_steps)))
+        self.undo_stack.append(self._capture_state())
         self.redo_stack.clear()
         cumulative_steps = copy.deepcopy(self.edit_steps)
         trace_snapshots: List[Tuple[GfaGraph, List[Dict[str, Any]]]] = [
@@ -309,7 +340,7 @@ class EditorSession:
                     }
                 )
         except Exception:
-            self.graph, self.edit_steps = self.undo_stack.pop()
+            self._restore_state(self.undo_stack.pop())
             self._clear_history_trace()
             raise
 
@@ -318,7 +349,7 @@ class EditorSession:
         self.history_trace = trace_entries
         self.history_trace_index = len(trace_entries) - 1
         self.version += 1
-        self.log.append(self._event("import_history", {"history_name": history_name, "step_count": len(steps)}))
+        self._append_log("import_history", {"history_name": history_name, "step_count": len(steps)})
         self.log.extend(trace_entries[1:])
         return self.snapshot()
 
@@ -335,9 +366,25 @@ class EditorSession:
         self.version += 1
         return self.snapshot()
 
+    def restore_operation_state(self, state_index: int) -> Dict[str, Any]:
+        self.has_graph()
+        if state_index < 0 or state_index >= len(self.operation_states):
+            raise HTTPException(status_code=400, detail="Operation state is out of range")
+        self._restore_state(self.operation_states[state_index])
+        self.undo_stack = [self._clone_state(state) for state in self.operation_states[:state_index]]
+        self.redo_stack = [
+            self._clone_state(state)
+            for state in reversed(self.operation_states[state_index + 1 :])
+        ]
+        self.active_operation_state_index = state_index
+        self.version += 1
+        return self.snapshot()
+
     def clear_operation_history(self) -> Dict[str, Any]:
         self.has_graph()
         self.log.clear()
+        self.operation_states.clear()
+        self.active_operation_state_index = None
         self._clear_history_trace()
         self.version += 1
         return self.snapshot()
@@ -357,6 +404,60 @@ class EditorSession:
             "action": action,
             "details": details,
         }
+
+    def _append_log(self, action: str, details: Dict[str, Any]) -> None:
+        event = self._event(action, details)
+        if self.graph is not None:
+            state_index = len(self.operation_states)
+            self.active_operation_state_index = state_index
+            self.operation_states.append(self._capture_state())
+            event["state_index"] = state_index
+        self.log.append(event)
+
+    def _capture_state(self) -> SessionState:
+        return SessionState(
+            graph=self.graph.clone() if self.graph is not None else None,
+            edit_steps=copy.deepcopy(self.edit_steps),
+            source_name=self.source_name,
+            alignment_hits_by_query=copy.deepcopy(self.alignment_hits_by_query),
+            alignment_format=self.alignment_format,
+            alignment_target_role=self.alignment_target_role,
+            alignment_source_name=self.alignment_source_name,
+            alignment_selected_read_id=self.alignment_selected_read_id,
+            alignment_last_command=self.alignment_last_command,
+            alignment_last_stderr=self.alignment_last_stderr,
+            active_operation_state_index=self.active_operation_state_index,
+        )
+
+    @staticmethod
+    def _clone_state(state: SessionState) -> SessionState:
+        return SessionState(
+            graph=state.graph.clone() if state.graph is not None else None,
+            edit_steps=copy.deepcopy(state.edit_steps),
+            source_name=state.source_name,
+            alignment_hits_by_query=copy.deepcopy(state.alignment_hits_by_query),
+            alignment_format=state.alignment_format,
+            alignment_target_role=state.alignment_target_role,
+            alignment_source_name=state.alignment_source_name,
+            alignment_selected_read_id=state.alignment_selected_read_id,
+            alignment_last_command=state.alignment_last_command,
+            alignment_last_stderr=state.alignment_last_stderr,
+            active_operation_state_index=state.active_operation_state_index,
+        )
+
+    def _restore_state(self, state: SessionState) -> None:
+        self.graph = state.graph.clone() if state.graph is not None else None
+        self.edit_steps = copy.deepcopy(state.edit_steps)
+        self.source_name = state.source_name
+        self.alignment_hits_by_query = copy.deepcopy(state.alignment_hits_by_query)
+        self.alignment_format = state.alignment_format
+        self.alignment_target_role = state.alignment_target_role
+        self.alignment_source_name = state.alignment_source_name
+        self.alignment_selected_read_id = state.alignment_selected_read_id
+        self.alignment_last_command = state.alignment_last_command
+        self.alignment_last_stderr = state.alignment_last_stderr
+        self.active_operation_state_index = state.active_operation_state_index
+        self._refresh_alignment()
 
     def _clear_history_trace(self) -> None:
         self.history_trace_snapshots.clear()
@@ -653,6 +754,10 @@ class HistoryTraceStepRequest(BaseModel):
     trace_index: int
 
 
+class OperationStateRequest(BaseModel):
+    state_index: int
+
+
 class EditStepJumpRequest(BaseModel):
     target_step_count: int
 
@@ -703,9 +808,9 @@ class SftpTransferRequest(BaseModel):
 
 
 app = FastAPI(
-    title="GFA Editor v1.1",
+    title="GFA Editor v1.2",
     description="A local Bandage-style GFA graph editor.",
-    version="1.0.0",
+    version="1.2.0",
 )
 
 app.add_middleware(
@@ -1098,6 +1203,7 @@ def history() -> Dict[str, Any]:
         "edit_step_count": len(session.edit_steps),
         "history_trace": session.history_trace,
         "history_trace_index": session.history_trace_index,
+        "operation_state_index": session.active_operation_state_index,
         "history": session.log,
     }
 
@@ -1124,6 +1230,11 @@ async def api_apply_history(history_file: UploadFile = File(...)) -> Dict[str, A
 @app.post("/api/history_trace_step")
 def api_history_trace_step(payload: HistoryTraceStepRequest) -> Dict[str, Any]:
     return session.restore_history_trace_step(payload.trace_index)
+
+
+@app.post("/api/operation_state")
+def api_operation_state(payload: OperationStateRequest) -> Dict[str, Any]:
+    return session.restore_operation_state(payload.state_index)
 
 
 @app.post("/api/clear_operation_history")
