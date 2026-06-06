@@ -124,7 +124,7 @@ Duplicate copies the selected contig and related links.
 
 Merge merges the selected link, or merges a selected connected path. In Cose and Band views, merge adjusts only the merged contig and related links where possible. Unmerged contigs and links keep their previous positions as much as possible to reduce layout jumps.
 
-Rotate changes the start position of a circular contig.
+Rotate changes the start position of a circular contig. It is enabled only when the selected contig has exactly one link and that link is a self-loop.
 
 Repeat A and Repeat B are repeat-resolution tools. A typical workflow is to duplicate the repeat contig first, then apply Repeat A or Repeat B depending on the desired strategy.
 

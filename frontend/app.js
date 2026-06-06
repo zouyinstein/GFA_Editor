@@ -2748,20 +2748,40 @@ function updateSelectionButtons(selected) {
   const isNode =
     selected &&
     (typeof selected.isNode === "function" ? selected.isNode() : selected.kind === "node");
+  const selectedNodeId = isNode ? selectedGraphItemId(selected) : null;
   dom.deleteSelectedButton.disabled = !hasGraph || !selected;
   dom.deleteAllSelectedButton.disabled = !hasGraph || !selectedCount;
   dom.duplicateNodeButton.disabled = !hasGraph || !selected || !isNode;
   dom.mergeLinkButton.disabled = !canMergeCurrentSelection();
   dom.exportSelectedButton.disabled = !hasGraph
     || (dom.exportFormat?.value === "svg" ? !selectedCount : !selection.edgeIds.length);
-  dom.rotateCircularButton.disabled = !hasGraph || !selected || !isNode;
+  dom.rotateCircularButton.disabled = !hasGraph
+    || !selected
+    || !isNode
+    || !isSingleSelfLoopContig(selectedNodeId);
   updateRepeatResolutionButtons();
+}
+
+function selectedGraphItemId(selected) {
+  if (!selected) return null;
+  if (typeof selected.id === "function") return selected.id();
+  if (selected.id) return selected.id;
+  if (typeof selected.data === "function") return selected.data("id") || selected.data()?.id;
+  return selected.data?.id || null;
 }
 
 function canMergeCurrentSelection() {
   if (!graphState) return false;
   const selection = getSelectedGraphSelection();
   return selection.edgeIds.length === 1 || selection.nodeIds.length >= 2;
+}
+
+function isSingleSelfLoopContig(nodeId) {
+  if (!nodeId || !graphState) return false;
+  const incidentEdges = getClientEdges().filter((edge) => edge.source === nodeId || edge.target === nodeId);
+  return incidentEdges.length === 1
+    && incidentEdges[0].source === nodeId
+    && incidentEdges[0].target === nodeId;
 }
 
 function getSelectedGraphSelection() {

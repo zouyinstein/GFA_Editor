@@ -572,13 +572,18 @@ def rotate_circular_node(graph: GfaGraph, node_id: str, offset: int) -> Dict[str
     normalized_offset = int(offset) % length
     if normalized_offset == 0:
         return {"node_id": node_id, "offset": 0, "length": length}
+    incident_links = [
+        link
+        for link in graph.links
+        if link.source == node_id or link.target == node_id
+    ]
     self_links = [
         link.id
-        for link in graph.links
+        for link in incident_links
         if link.source == node_id and link.target == node_id
     ]
-    if not self_links:
-        raise ValueError("Rotate circular start requires a self-link on the selected contig")
+    if len(incident_links) != 1 or len(self_links) != 1:
+        raise ValueError("Rotate circular start requires the selected contig to have exactly one self-loop")
     segment.sequence = segment.sequence[normalized_offset:] + segment.sequence[:normalized_offset]
     segment.length = len(segment.sequence)
     _set_tag(segment.tags, "LN", "i", segment.length)
