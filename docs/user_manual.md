@@ -1,6 +1,6 @@
-# GFA Editor v1.2.1 User Manual
+# GFA Editor v1.2.2 User Manual
 
-This manual describes the main tools and workflows in GFA Editor v1.2.1. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
+This manual describes the main tools and workflows in GFA Editor v1.2.2. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
 
 ## 1. Start, Stop, and Data Safety
 
@@ -39,7 +39,7 @@ By default, GFA Editor only reads and writes data on your local machine. It inte
 
 ## 2. Interface Layout
 
-The top bar shows the app icon, `GFA Editor v1.2.1`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
+The top bar shows the app icon, `GFA Editor v1.2.2`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
 
 The left panel contains Stats, Import, Labels, and Alignments.
 
@@ -169,17 +169,18 @@ The quick export button on the top right saves the current graph with a default 
 
 Export options include:
 
-- Format: GFA, FASTA, or SVG image
-- Save graph: choose path and file name for the current graph
-- Save SVG view: save the current view as an SVG image
-- Selected: export selected links or selected SVG content
+- GFA: save the current graph as GFA
+- FASTA: save the current graph as FASTA
+- SVG: save the current view as SVG
+- PDF: save the current view as a vector PDF
+- Selected: export selected links as GFA
 - History: export edit history JSON
 
 In browser mode, export opens a save-file dialog so you can choose a path and rename the file instead of immediately downloading.
 
 In the macOS standalone app, export uses the system file picker so you can choose the save location and file name.
 
-SVG export preserves visible labels, colors, and alignment foreground hit segments from the current Cose, Band, or Twin view.
+SVG and PDF export preserve visible labels, colors, and alignment foreground hit segments from the current Cose, Band, or Twin view. Exported SVG paths include explicit no-fill and stroke attributes for better compatibility with vector editors such as Affinity Designer and system preview tools.
 
 ## 10. Desktop and Standalone Builds
 

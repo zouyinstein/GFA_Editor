@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 from pathlib import Path
 import signal
@@ -166,13 +167,45 @@ class DesktopApi:
         except Exception as exc:
             return {"ok": False, "message": f"Save failed: {exc}"}
 
+    def save_binary_file(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if self.window is None:
+            return {"ok": False, "message": "Desktop window is not ready."}
+
+        try:
+            import webview
+
+            filename = str(payload.get("filename") or "export.bin")
+            raw_file_types = payload.get("file_types") or []
+            file_types = tuple(str(item) for item in raw_file_types if str(item).strip())
+            selected = self.window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=filename,
+                file_types=file_types,
+            )
+            if not selected:
+                return {"ok": True, "canceled": True}
+            path = selected[0] if isinstance(selected, (list, tuple)) else selected
+            if not path:
+                return {"ok": True, "canceled": True}
+            target = Path(str(path)).expanduser()
+            contents = base64.b64decode(str(payload.get("contents_base64") or ""))
+            target.write_bytes(contents)
+            return {
+                "ok": True,
+                "canceled": False,
+                "path": str(target),
+                "bytes": len(contents),
+            }
+        except Exception as exc:
+            return {"ok": False, "message": f"Save failed: {exc}"}
+
 
 def run_embedded_webview(url: str, server) -> None:
     import webview
 
     api = DesktopApi()
     window = webview.create_window(
-        "GFA Editor v1.2.1",
+        "GFA Editor v1.2.2",
         url,
         width=1440,
         height=920,

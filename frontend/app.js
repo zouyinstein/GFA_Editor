@@ -12,6 +12,7 @@ let pendingMergeLayout = null;
 let repeatResolutionContext = null;
 let serverSavePathAuto = true;
 let serverSaveSourceName = null;
+const DEFAULT_TEXT_EXPORT_FORMAT = "gfa";
 
 const alignmentPresets = {
   blastn: [
@@ -234,11 +235,13 @@ function cacheDom() {
     "gfa-file",
     "gfa-file-label",
     "keep-sequences",
-    "export-format",
     "export-menu-toggle",
     "export-menu-panel",
     "quick-export-button",
+    "export-gfa-button",
+    "export-fasta-button",
     "export-svg-button",
+    "export-pdf-button",
     "history-file",
     "history-file-label",
     "apply-history-button",
@@ -295,7 +298,6 @@ function cacheDom() {
     "server-files-panel",
     "undo-button",
     "redo-button",
-    "export-button",
     "export-selected-button",
     "export-history-button",
     "fit-button",
@@ -563,8 +565,10 @@ function bindEvents() {
     toggleExportMenuPanel();
   });
   dom.exportMenuPanel.addEventListener("click", (event) => event.stopPropagation());
-  dom.exportButton.addEventListener("click", downloadExport);
+  dom.exportGfaButton.addEventListener("click", () => downloadExport("gfa"));
+  dom.exportFastaButton.addEventListener("click", () => downloadExport("fasta"));
   dom.exportSvgButton.addEventListener("click", () => saveSvgExport({ selectedOnly: false, quick: false }));
+  dom.exportPdfButton.addEventListener("click", () => savePdfExport({ selectedOnly: false }));
   dom.exportSelectedButton.addEventListener("click", downloadSelectedExport);
   dom.exportHistoryButton.addEventListener("click", downloadEditHistory);
   dom.applyHistoryButton.addEventListener("click", applyHistoryFile);
@@ -632,13 +636,6 @@ function bindEvents() {
   dom.colorMode.addEventListener("change", () => {
     refreshVisualProperties();
     applyFilters();
-  });
-  dom.exportFormat.addEventListener("change", () => {
-    if (serverSavePathAuto) {
-      updateServerSavePath();
-    }
-    updateServerFileButtons();
-    updateSelectionButtons(getSelectedGraphItem());
   });
   dom.nodeWidth.addEventListener("input", refreshVisualProperties);
   dom.nodeSizeScale.addEventListener("input", refreshVisualProperties);
@@ -761,13 +758,8 @@ function graphAddsNodes(previousPayload, nextPayload) {
   });
 }
 
-async function downloadExport() {
+async function downloadExport(format = DEFAULT_TEXT_EXPORT_FORMAT) {
   if (!graphState) return;
-  const format = dom.exportFormat.value;
-  if (format === "svg") {
-    await saveSvgExport({ selectedOnly: false, quick: false });
-    return;
-  }
   try {
     setStatus(`Exporting ${format.toUpperCase()}...`);
     const response = await fetch(`/api/export?format=${encodeURIComponent(format)}`);
@@ -795,11 +787,7 @@ async function downloadExport() {
 
 async function quickDownloadExport() {
   if (!graphState) return;
-  const format = dom.exportFormat.value;
-  if (format === "svg") {
-    await saveSvgExport({ selectedOnly: false, quick: true });
-    return;
-  }
+  const format = DEFAULT_TEXT_EXPORT_FORMAT;
   try {
     setStatus(`Exporting ${format.toUpperCase()}...`);
     const response = await fetch(`/api/export?format=${encodeURIComponent(format)}`);
@@ -835,15 +823,7 @@ async function quickDownloadExport() {
 async function downloadSelectedExport() {
   if (!graphState) return;
   const selection = getSelectedGraphSelection();
-  const format = dom.exportFormat.value;
-  if (format === "svg") {
-    if (!selection.nodeIds.length && !selection.edgeIds.length) {
-      showToast("Select one or more graph items");
-      return;
-    }
-    await saveSvgExport({ selectedOnly: true, quick: false });
-    return;
-  }
+  const format = DEFAULT_TEXT_EXPORT_FORMAT;
   const edgeIds = selection.edgeIds;
   if (!edgeIds.length) {
     showToast("Select one or more links");
@@ -1106,6 +1086,54 @@ async function saveTextExport(text, filename, mimeType = "text/plain") {
   return { ok: true, downloaded: true, canceled: false };
 }
 
+async function saveBinaryExport(bytes, filename, mimeType = "application/octet-stream") {
+  const desktopApi = window.pywebview?.api;
+  if (desktopApi && typeof desktopApi.save_binary_file === "function") {
+    const result = await desktopApi.save_binary_file({
+      filename,
+      contents_base64: uint8ToBase64(bytes),
+      file_types: fileTypesForFilename(filename),
+    });
+    if (!result?.ok) {
+      throw new Error(result?.message || "Save failed");
+    }
+    return result;
+  }
+  const blob = new Blob([bytes], { type: mimeType });
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: browserFileTypesForFilename(filename, mimeType),
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return { ok: true, canceled: false, path: handle.name };
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        return { ok: true, canceled: true };
+      }
+      throw new Error(error?.message || "Save failed");
+    }
+  }
+  const fallbackName = window.prompt("Save as", filename);
+  if (fallbackName == null) {
+    return { ok: true, canceled: true };
+  }
+  downloadBlob(blob, fallbackName.trim() || filename);
+  return { ok: true, downloaded: true, canceled: false };
+}
+
+function uint8ToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
 function browserFileTypesForFilename(filename, mimeType) {
   const extension = String(filename || "").toLowerCase().split(".").pop();
   if (extension === "gfa") {
@@ -1116,6 +1144,9 @@ function browserFileTypesForFilename(filename, mimeType) {
   }
   if (extension === "svg") {
     return [{ description: "SVG images", accept: { "image/svg+xml": [".svg"] } }];
+  }
+  if (extension === "pdf") {
+    return [{ description: "PDF documents", accept: { "application/pdf": [".pdf"] } }];
   }
   if (extension === "json") {
     return [{ description: "JSON files", accept: { "application/json": [".json"] } }];
@@ -1130,6 +1161,7 @@ function fileTypesForFilename(filename) {
     return ["FASTA files (*.fasta;*.fa)", "All files (*.*)"];
   }
   if (extension === "svg") return ["SVG images (*.svg)", "All files (*.*)"];
+  if (extension === "pdf") return ["PDF documents (*.pdf)", "All files (*.*)"];
   if (extension === "json") return ["JSON files (*.json)", "All files (*.*)"];
   return ["Text files (*.txt)", "All files (*.*)"];
 }
@@ -1171,6 +1203,26 @@ async function saveSvgExport({ selectedOnly = false, quick = false } = {}) {
       return;
     }
     showToast("SVG exported");
+    setStatus("Ready");
+  } catch (error) {
+    setStatus(error.message);
+    showToast(error.message);
+  }
+}
+
+async function savePdfExport({ selectedOnly = false } = {}) {
+  if (!graphState) return;
+  try {
+    setStatus("Exporting PDF...");
+    const svgText = buildGraphSvgExport({ selectedOnly });
+    const pdfBytes = buildPdfFromSvg(svgText);
+    const filename = `${fileStem(graphState.session?.source_name, "graph")}${selectedOnly ? ".selected" : ""}.pdf`;
+    const saved = await saveBinaryExport(pdfBytes, filename, "application/pdf");
+    if (saved.canceled) {
+      setStatus("Export canceled");
+      return;
+    }
+    showToast("PDF exported");
     setStatus("Ready");
   } catch (error) {
     setStatus(error.message);
@@ -1271,8 +1323,11 @@ function buildCytoscapeSvgLayer({ selectedOnly = false, selection = null } = {})
     edgeLayer.appendChild(svgEl("path", {
       class: "export-edge",
       d: `M ${round(sourcePosition.x)} ${round(sourcePosition.y)} L ${round(targetPosition.x)} ${round(targetPosition.y)}`,
+      fill: "none",
       stroke: color,
       "stroke-width": width,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
     }));
     edgeLayer.appendChild(svgEl("polygon", {
       class: "export-arrow",
@@ -1335,8 +1390,11 @@ function buildBandageSvgLayer({ selectedOnly = false, selection = null } = {}) {
     linkLayer.appendChild(svgEl("path", {
       class: "export-bandage-link",
       d: geometry.path,
+      fill: "none",
       stroke: color,
       "stroke-width": Math.max(2.3, edgeWidth * 0.78),
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
     }));
     linkLayer.appendChild(svgEl("polygon", {
       class: "export-arrow",
@@ -1365,8 +1423,11 @@ function buildBandageSvgLayer({ selectedOnly = false, selection = null } = {}) {
     contigGroup.appendChild(svgEl("path", {
       class: "bandage-contig-path",
       d: geometry.path,
+      fill: "none",
       stroke: chooseNodeColor(node, graphState.stats, "bandage"),
       "stroke-width": geometry.width,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
     }));
     appendBandageAlignmentSpans(contigGroup, node, geometry);
     appendBandageEndpoint(contigGroup, geometry.start, "-");
@@ -1392,11 +1453,479 @@ function exportSvgStyle() {
       dominant-baseline: central;
     }
     .export-edge-label, .bandage-link-label { font-size: 9px; }
-    .bandage-label-outline { paint-order: stroke; stroke: #fbfcf8; stroke-width: 4px; stroke-linejoin: round; }
+    .bandage-label-outline { paint-order: stroke; stroke: #fbfcf8; stroke-width: 1px; stroke-linejoin: round; }
     .bandage-query-hit-block { stroke-linecap: butt; }
     .bandage-endpoint { fill: rgba(31, 37, 33, 0.85); }
     .bandage-endpoint-label { fill: #ffffff; font-size: 7px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
   `;
+}
+
+function buildPdfFromSvg(svgText) {
+  const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
+  const root = doc.documentElement;
+  if (!root || root.nodeName.toLowerCase() !== "svg") {
+    throw new Error("Could not build PDF from SVG");
+  }
+  const viewBox = parseViewBox(root.getAttribute("viewBox"));
+  const width = Number(root.getAttribute("width")) || viewBox.width || 800;
+  const height = Number(root.getAttribute("height")) || viewBox.height || 600;
+  const state = { width, height, commands: [] };
+  renderSvgPdfChildren(root, state, {
+    tx: -viewBox.x,
+    ty: -viewBox.y,
+  });
+  return encodePdfDocument(width, height, state.commands.join("\n") + "\n");
+}
+
+function parseViewBox(value) {
+  const numbers = String(value || "").trim().split(/[\s,]+/).map(Number);
+  if (numbers.length === 4 && numbers.every(Number.isFinite)) {
+    return { x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3] };
+  }
+  return { x: 0, y: 0, width: 0, height: 0 };
+}
+
+function renderSvgPdfChildren(element, state, transform) {
+  [...element.children].forEach((child) => renderSvgPdfElement(child, state, combinePdfTransform(transform, child)));
+}
+
+function renderSvgPdfElement(element, state, transform) {
+  const tag = element.tagName.toLowerCase();
+  if (tag === "style" || tag === "title") return;
+  if (tag === "svg" || tag === "g") {
+    renderSvgPdfChildren(element, state, transform);
+    return;
+  }
+  if (tag === "rect") {
+    appendPdfRect(element, state, transform);
+    return;
+  }
+  if (tag === "line") {
+    appendPdfLine(element, state, transform);
+    return;
+  }
+  if (tag === "path") {
+    appendPdfPath(element, state, transform);
+    return;
+  }
+  if (tag === "polygon") {
+    appendPdfPolygon(element, state, transform);
+    return;
+  }
+  if (tag === "circle") {
+    appendPdfEllipse(element, state, transform, true);
+    return;
+  }
+  if (tag === "ellipse") {
+    appendPdfEllipse(element, state, transform, false);
+    return;
+  }
+  if (tag === "text") {
+    appendPdfText(element, state, transform);
+  }
+}
+
+function combinePdfTransform(parent, element) {
+  const local = parseSvgTranslate(element.getAttribute("transform"));
+  return {
+    tx: parent.tx + local.tx,
+    ty: parent.ty + local.ty,
+  };
+}
+
+function parseSvgTranslate(value) {
+  const match = String(value || "").match(/translate\(([-+0-9.eE]+)(?:[\s,]+([-+0-9.eE]+))?\)/);
+  if (!match) return { tx: 0, ty: 0 };
+  return {
+    tx: Number(match[1]) || 0,
+    ty: Number(match[2]) || 0,
+  };
+}
+
+function pdfPoint(x, y, state, transform) {
+  return {
+    x: Number(x) + transform.tx,
+    y: state.height - (Number(y) + transform.ty),
+  };
+}
+
+function appendPdfRect(element, state, transform) {
+  const x = Number(element.getAttribute("x") || 0) + transform.tx;
+  const y = Number(element.getAttribute("y") || 0) + transform.ty;
+  const width = Number(element.getAttribute("width") || 0);
+  const height = Number(element.getAttribute("height") || 0);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+  const fill = pdfElementFill(element);
+  const stroke = pdfElementStroke(element);
+  const strokeWidth = pdfStrokeWidth(element, 1);
+  const bottom = state.height - y - height;
+  appendPdfPaintedShape(state, [`${pdfNum(x)} ${pdfNum(bottom)} ${pdfNum(width)} ${pdfNum(height)} re`], fill, stroke, strokeWidth);
+}
+
+function appendPdfLine(element, state, transform) {
+  const start = pdfPoint(element.getAttribute("x1") || 0, element.getAttribute("y1") || 0, state, transform);
+  const end = pdfPoint(element.getAttribute("x2") || 0, element.getAttribute("y2") || 0, state, transform);
+  const stroke = pdfElementStroke(element) || "#1f2521";
+  const strokeWidth = pdfStrokeWidth(element, 1);
+  appendPdfPaintedShape(
+    state,
+    [`${pdfNum(start.x)} ${pdfNum(start.y)} m`, `${pdfNum(end.x)} ${pdfNum(end.y)} l`],
+    null,
+    stroke,
+    strokeWidth,
+    element,
+  );
+}
+
+function appendPdfPath(element, state, transform) {
+  const d = element.getAttribute("d");
+  if (!d) return;
+  const commands = svgPathToPdfCommands(d, state, transform);
+  if (!commands.length) return;
+  appendPdfPaintedShape(
+    state,
+    commands,
+    pdfElementFill(element),
+    pdfElementStroke(element),
+    pdfStrokeWidth(element, 1),
+    element,
+  );
+}
+
+function appendPdfPolygon(element, state, transform) {
+  const points = parseSvgPoints(element.getAttribute("points"));
+  if (points.length < 2) return;
+  const commands = points.map((point, index) => {
+    const pdf = pdfPoint(point.x, point.y, state, transform);
+    return `${pdfNum(pdf.x)} ${pdfNum(pdf.y)} ${index === 0 ? "m" : "l"}`;
+  });
+  commands.push("h");
+  appendPdfPaintedShape(
+    state,
+    commands,
+    pdfElementFill(element),
+    pdfElementStroke(element),
+    pdfStrokeWidth(element, 1),
+    element,
+  );
+}
+
+function appendPdfEllipse(element, state, transform, isCircle) {
+  const cx = Number(element.getAttribute("cx") || 0);
+  const cy = Number(element.getAttribute("cy") || 0);
+  const rx = isCircle ? Number(element.getAttribute("r") || 0) : Number(element.getAttribute("rx") || 0);
+  const ry = isCircle ? rx : Number(element.getAttribute("ry") || 0);
+  if (!rx || !ry) return;
+  const center = pdfPoint(cx, cy, state, transform);
+  const commands = ellipsePdfCommands(center.x, center.y, rx, ry);
+  appendPdfPaintedShape(
+    state,
+    commands,
+    pdfElementFill(element),
+    pdfElementStroke(element),
+    pdfStrokeWidth(element, 1),
+    element,
+  );
+}
+
+function appendPdfText(element, state, transform) {
+  const text = String(element.textContent || "");
+  if (!text.trim()) return;
+  const className = element.getAttribute("class") || "";
+  const fontSize = pdfTextFontSize(element, className);
+  const point = pdfPoint(element.getAttribute("x") || 0, element.getAttribute("y") || 0, state, transform);
+  const textWidth = estimatePdfTextWidth(text, fontSize);
+  const x = point.x - textWidth / 2;
+  const y = point.y - fontSize * 0.35;
+  const font = className.includes("bandage-endpoint-label") ? "F2" : "F1";
+  const escaped = escapePdfText(text);
+  const fill = pdfTextFill(className);
+  state.commands.push("q");
+  if (className.includes("bandage-label-outline")) {
+    state.commands.push("1 J 1 j");
+    state.commands.push(`${pdfNum(0.5)} w`);
+    state.commands.push(`${pdfColorCommand("#fbfcf8", "RG")}`);
+    state.commands.push("BT");
+    state.commands.push(`/${font} ${pdfNum(fontSize)} Tf`);
+    state.commands.push("1 Tr");
+    state.commands.push(`${pdfNum(x)} ${pdfNum(y)} Td`);
+    state.commands.push(`(${escaped}) Tj`);
+    state.commands.push("ET");
+  }
+  state.commands.push(`${pdfColorCommand(fill, "rg")}`);
+  state.commands.push("BT");
+  state.commands.push(`/${font} ${pdfNum(fontSize)} Tf`);
+  state.commands.push("0 Tr");
+  state.commands.push(`${pdfNum(x)} ${pdfNum(y)} Td`);
+  state.commands.push(`(${escaped}) Tj`);
+  state.commands.push("ET");
+  state.commands.push("Q");
+}
+
+function appendPdfPaintedShape(state, shapeCommands, fill, stroke, strokeWidth = 1, element = null) {
+  if (!fill && !stroke) return;
+  state.commands.push("q");
+  if (element) {
+    state.commands.push(`${pdfLineCap(element)} J`);
+    state.commands.push(`${pdfLineJoin(element)} j`);
+  }
+  if (stroke) {
+    state.commands.push(`${pdfNum(strokeWidth)} w`);
+    state.commands.push(pdfColorCommand(stroke, "RG"));
+  }
+  if (fill) {
+    state.commands.push(pdfColorCommand(fill, "rg"));
+  }
+  state.commands.push(...shapeCommands);
+  state.commands.push(fill && stroke ? "B" : fill ? "f" : "S");
+  state.commands.push("Q");
+}
+
+function svgPathToPdfCommands(d, state, transform) {
+  const tokens = String(d).match(/[AaCcHhLlMmQqSsTtVvZz]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?/g) || [];
+  const commands = [];
+  let index = 0;
+  let command = "";
+  let current = { x: 0, y: 0 };
+  let start = { x: 0, y: 0 };
+
+  const isCommand = (value) => /^[A-Za-z]$/.test(value);
+  const hasNumber = () => index < tokens.length && !isCommand(tokens[index]);
+  const read = () => Number(tokens[index++]);
+  const absolute = (x, y, relative) => relative ? { x: current.x + x, y: current.y + y } : { x, y };
+  const pushPoint = (point, op) => {
+    const pdf = pdfPoint(point.x, point.y, state, transform);
+    commands.push(`${pdfNum(pdf.x)} ${pdfNum(pdf.y)} ${op}`);
+  };
+
+  while (index < tokens.length) {
+    if (isCommand(tokens[index])) {
+      command = tokens[index++];
+    }
+    if (!command) break;
+    const relative = command === command.toLowerCase();
+    const upper = command.toUpperCase();
+    if (upper === "M") {
+      if (!hasNumber()) break;
+      current = absolute(read(), read(), relative);
+      start = { ...current };
+      pushPoint(current, "m");
+      command = relative ? "l" : "L";
+      while (hasNumber()) {
+        current = absolute(read(), read(), relative);
+        pushPoint(current, "l");
+      }
+    } else if (upper === "L") {
+      while (hasNumber()) {
+        current = absolute(read(), read(), relative);
+        pushPoint(current, "l");
+      }
+    } else if (upper === "H") {
+      while (hasNumber()) {
+        const x = read();
+        current = relative ? { x: current.x + x, y: current.y } : { x, y: current.y };
+        pushPoint(current, "l");
+      }
+    } else if (upper === "V") {
+      while (hasNumber()) {
+        const y = read();
+        current = relative ? { x: current.x, y: current.y + y } : { x: current.x, y };
+        pushPoint(current, "l");
+      }
+    } else if (upper === "Q") {
+      while (hasNumber()) {
+        const control = absolute(read(), read(), relative);
+        const end = absolute(read(), read(), relative);
+        const c1 = {
+          x: current.x + (2 / 3) * (control.x - current.x),
+          y: current.y + (2 / 3) * (control.y - current.y),
+        };
+        const c2 = {
+          x: end.x + (2 / 3) * (control.x - end.x),
+          y: end.y + (2 / 3) * (control.y - end.y),
+        };
+        const p1 = pdfPoint(c1.x, c1.y, state, transform);
+        const p2 = pdfPoint(c2.x, c2.y, state, transform);
+        const p3 = pdfPoint(end.x, end.y, state, transform);
+        commands.push(`${pdfNum(p1.x)} ${pdfNum(p1.y)} ${pdfNum(p2.x)} ${pdfNum(p2.y)} ${pdfNum(p3.x)} ${pdfNum(p3.y)} c`);
+        current = end;
+      }
+    } else if (upper === "C") {
+      while (hasNumber()) {
+        const c1 = absolute(read(), read(), relative);
+        const c2 = absolute(read(), read(), relative);
+        const end = absolute(read(), read(), relative);
+        const p1 = pdfPoint(c1.x, c1.y, state, transform);
+        const p2 = pdfPoint(c2.x, c2.y, state, transform);
+        const p3 = pdfPoint(end.x, end.y, state, transform);
+        commands.push(`${pdfNum(p1.x)} ${pdfNum(p1.y)} ${pdfNum(p2.x)} ${pdfNum(p2.y)} ${pdfNum(p3.x)} ${pdfNum(p3.y)} c`);
+        current = end;
+      }
+    } else if (upper === "Z") {
+      commands.push("h");
+      current = { ...start };
+    } else {
+      break;
+    }
+  }
+  return commands;
+}
+
+function parseSvgPoints(value) {
+  const numbers = String(value || "").trim().split(/[\s,]+/).map(Number).filter(Number.isFinite);
+  const points = [];
+  for (let index = 0; index + 1 < numbers.length; index += 2) {
+    points.push({ x: numbers[index], y: numbers[index + 1] });
+  }
+  return points;
+}
+
+function ellipsePdfCommands(cx, cy, rx, ry) {
+  const k = 0.5522847498307936;
+  return [
+    `${pdfNum(cx + rx)} ${pdfNum(cy)} m`,
+    `${pdfNum(cx + rx)} ${pdfNum(cy + ry * k)} ${pdfNum(cx + rx * k)} ${pdfNum(cy + ry)} ${pdfNum(cx)} ${pdfNum(cy + ry)} c`,
+    `${pdfNum(cx - rx * k)} ${pdfNum(cy + ry)} ${pdfNum(cx - rx)} ${pdfNum(cy + ry * k)} ${pdfNum(cx - rx)} ${pdfNum(cy)} c`,
+    `${pdfNum(cx - rx)} ${pdfNum(cy - ry * k)} ${pdfNum(cx - rx * k)} ${pdfNum(cy - ry)} ${pdfNum(cx)} ${pdfNum(cy - ry)} c`,
+    `${pdfNum(cx + rx * k)} ${pdfNum(cy - ry)} ${pdfNum(cx + rx)} ${pdfNum(cy - ry * k)} ${pdfNum(cx + rx)} ${pdfNum(cy)} c`,
+    "h",
+  ];
+}
+
+function pdfElementFill(element) {
+  const attr = element.getAttribute("fill") || styleAttributeValue(element, "fill");
+  if (attr) return attr === "none" ? null : attr;
+  const className = element.getAttribute("class") || "";
+  if (className.includes("export-background")) return "#fbfcf8";
+  if (className.includes("bandage-endpoint")) return "rgba(31, 37, 33, 0.85)";
+  return null;
+}
+
+function pdfElementStroke(element) {
+  const attr = element.getAttribute("stroke") || styleAttributeValue(element, "stroke");
+  if (attr) return attr === "none" ? null : attr;
+  const className = element.getAttribute("class") || "";
+  if (className.includes("export-divider")) return "#d9ded2";
+  if (className.includes("export-node")) return "rgba(31, 37, 33, 0.45)";
+  return null;
+}
+
+function pdfStrokeWidth(element, fallback) {
+  return Number(element.getAttribute("stroke-width") || styleAttributeValue(element, "stroke-width") || fallback) || fallback;
+}
+
+function styleAttributeValue(element, name) {
+  const style = element.getAttribute("style") || "";
+  const match = style.match(new RegExp(`${name}\\s*:\\s*([^;]+)`));
+  return match?.[1]?.trim() || "";
+}
+
+function pdfLineCap(element) {
+  const value = element.getAttribute("stroke-linecap") || styleAttributeValue(element, "stroke-linecap");
+  if (value === "round") return 1;
+  if (value === "square") return 2;
+  return 0;
+}
+
+function pdfLineJoin(element) {
+  const value = element.getAttribute("stroke-linejoin") || styleAttributeValue(element, "stroke-linejoin");
+  if (value === "round") return 1;
+  if (value === "bevel") return 2;
+  return 0;
+}
+
+function pdfTextFontSize(element, className) {
+  const attr = Number(element.getAttribute("font-size") || styleAttributeValue(element, "font-size"));
+  if (attr) return attr;
+  if (className.includes("bandage-endpoint-label")) return 7;
+  if (className.includes("export-edge-label") || className.includes("bandage-link-label")) return 9;
+  return 10;
+}
+
+function pdfTextFill(className) {
+  if (className.includes("bandage-endpoint-label")) return "#ffffff";
+  return "#1f2521";
+}
+
+function estimatePdfTextWidth(text, fontSize) {
+  return String(text || "").length * fontSize * 0.56;
+}
+
+function pdfColorCommand(color, op) {
+  const parsed = parsePdfColor(color);
+  const rgb = parsed || { r: 0, g: 0, b: 0 };
+  return `${pdfNum(rgb.r / 255)} ${pdfNum(rgb.g / 255)} ${pdfNum(rgb.b / 255)} ${op}`;
+}
+
+function parsePdfColor(color) {
+  const value = String(color || "").trim();
+  if (!value || value === "none" || value === "transparent") return null;
+  const hex = value.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const raw = hex[1].length === 3
+      ? hex[1].split("").map((char) => char + char).join("")
+      : hex[1];
+    return {
+      r: parseInt(raw.slice(0, 2), 16),
+      g: parseInt(raw.slice(2, 4), 16),
+      b: parseInt(raw.slice(4, 6), 16),
+    };
+  }
+  const rgb = value.match(/^rgba?\(([^)]+)\)$/i);
+  if (rgb) {
+    const parts = rgb[1].split(",").map((part) => Number(part.trim()));
+    if (parts.length >= 3 && parts.slice(0, 3).every(Number.isFinite)) {
+      return { r: parts[0], g: parts[1], b: parts[2] };
+    }
+  }
+  return null;
+}
+
+function encodePdfDocument(width, height, content) {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pdfNum(width)} ${pdfNum(height)}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    `<< /Length ${pdfLatin1Length(content)} >>\nstream\n${content}endstream`,
+  ];
+  let pdf = "%PDF-1.4\n%\xFF\xFF\xFF\xFF\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(pdfLatin1Length(pdf));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefStart = pdfLatin1Length(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  offsets.slice(1).forEach((offset) => {
+    pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  const bytes = new Uint8Array(pdf.length);
+  for (let index = 0; index < pdf.length; index += 1) {
+    bytes[index] = pdf.charCodeAt(index) & 0xff;
+  }
+  return bytes;
+}
+
+function pdfLatin1Length(value) {
+  return String(value).length;
+}
+
+function escapePdfText(text) {
+  return String(text || "")
+    .replace(/[^\x20-\x7E]/g, "?")
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
+}
+
+function pdfNum(value) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return "0";
+  return String(Math.round(numberValue * 1000) / 1000);
 }
 
 function appendSvgText(parent, text, x, y, className) {
@@ -1505,7 +2034,7 @@ async function loadSelectedServerFile() {
 
 async function saveGraphToServer() {
   if (!graphState) return;
-  const format = dom.exportFormat.value;
+  const format = DEFAULT_TEXT_EXPORT_FORMAT;
   if (!isBackendExportFormat(format)) {
     showToast("Use export options to save SVG views");
     return;
@@ -1541,7 +2070,7 @@ function sftpPayload(extra = {}) {
     password: dom.sftpPassword.value,
     remote_path: dom.sftpRemotePath.value.trim(),
     keep_sequences: dom.keepSequences.checked,
-    format: dom.exportFormat.value,
+    format: DEFAULT_TEXT_EXPORT_FORMAT,
     ...extra,
   };
 }
@@ -1568,7 +2097,7 @@ async function downloadFromSftp() {
 
 async function uploadToSftp() {
   if (!graphState) return;
-  if (!isBackendExportFormat(dom.exportFormat.value)) {
+  if (!isBackendExportFormat(DEFAULT_TEXT_EXPORT_FORMAT)) {
     showToast("SFTP upload supports GFA/FASTA");
     return;
   }
@@ -1576,7 +2105,7 @@ async function uploadToSftp() {
     setStatus("Uploading via SFTP...");
     const response = await fetch("/api/sftp_upload", {
       method: "POST",
-      body: JSON.stringify(sftpPayload({ format: dom.exportFormat.value })),
+      body: JSON.stringify(sftpPayload({ format: DEFAULT_TEXT_EXPORT_FORMAT })),
       headers: { "Content-Type": "application/json" },
     });
     if (!response.ok) {
@@ -1593,7 +2122,7 @@ async function uploadToSftp() {
 
 function updateServerFileButtons() {
   const canLoad = Boolean(dom.serverFileSelect?.value);
-  const canSaveTextGraph = Boolean(graphState && isBackendExportFormat(dom.exportFormat?.value));
+  const canSaveTextGraph = Boolean(graphState && isBackendExportFormat(DEFAULT_TEXT_EXPORT_FORMAT));
   dom.serverLoadButton.disabled = !canLoad;
   dom.serverSaveButton.disabled = !canSaveTextGraph;
   updateSftpButtons();
@@ -1612,7 +2141,7 @@ function updateSftpButtons() {
       && dom.sftpRemotePath?.value.trim(),
   );
   dom.sftpDownloadButton.disabled = !hasConnection;
-  dom.sftpUploadButton.disabled = !hasConnection || !graphState || !isBackendExportFormat(dom.exportFormat?.value);
+  dom.sftpUploadButton.disabled = !hasConnection || !graphState || !isBackendExportFormat(DEFAULT_TEXT_EXPORT_FORMAT);
 }
 
 function updateAlignmentButtons() {
@@ -1813,11 +2342,11 @@ function showAlignmentVisualMode() {
 
 function updateServerSavePath() {
   if (!graphState || !dom.serverSavePath) return;
-  if (!isBackendExportFormat(dom.exportFormat?.value)) return;
+  if (!isBackendExportFormat(DEFAULT_TEXT_EXPORT_FORMAT)) return;
   const sourceName = graphState.session?.source_name || "edited";
   if (!serverSavePathAuto && sourceName === serverSaveSourceName) return;
   serverSaveSourceName = sourceName;
-  const extension = dom.exportFormat.value === "gfa" ? "gfa" : "fasta";
+  const extension = DEFAULT_TEXT_EXPORT_FORMAT === "gfa" ? "gfa" : "fasta";
   const source = sourceName.replace(/^server:/, "");
   const parts = source.split("/");
   const filename = parts.pop() || "edited";
@@ -2763,8 +3292,7 @@ function updateSelectionButtons(selected) {
   dom.deleteAllSelectedButton.disabled = !hasGraph || !selectedCount;
   dom.duplicateNodeButton.disabled = !hasGraph || !selected || !isNode;
   dom.mergeLinkButton.disabled = !canMergeCurrentSelection();
-  dom.exportSelectedButton.disabled = !hasGraph
-    || (dom.exportFormat?.value === "svg" ? !selectedCount : !selection.edgeIds.length);
+  dom.exportSelectedButton.disabled = !hasGraph || !selection.edgeIds.length;
   dom.rotateCircularButton.disabled = !hasGraph
     || !selected
     || !isNode
@@ -2949,9 +3477,11 @@ function updateGlobalButtons(session) {
   const hasGraph = Boolean(graphState);
   dom.undoButton.disabled = !session?.can_undo;
   dom.redoButton.disabled = !session?.can_redo;
-  dom.exportButton.disabled = !hasGraph;
+  dom.exportGfaButton.disabled = !hasGraph;
+  dom.exportFastaButton.disabled = !hasGraph;
   dom.quickExportButton.disabled = !hasGraph;
   dom.exportSvgButton.disabled = !hasGraph;
+  dom.exportPdfButton.disabled = !hasGraph;
   dom.exportSelectedButton.disabled = true;
   dom.exportHistoryButton.disabled = !hasGraph;
   dom.fitButton.disabled = !hasGraph;
@@ -2959,7 +3489,7 @@ function updateGlobalButtons(session) {
   dom.findNodeButton.disabled = !hasGraph;
   dom.drawGraphButton.disabled = !hasGraph;
   dom.drawGraphToolbarButton.disabled = !hasGraph;
-  dom.serverSaveButton.disabled = !hasGraph || !isBackendExportFormat(dom.exportFormat?.value);
+  dom.serverSaveButton.disabled = !hasGraph || !isBackendExportFormat(DEFAULT_TEXT_EXPORT_FORMAT);
   updateServerFileButtons();
   updateHistoryFileButtons();
   updateSftpButtons();
@@ -4566,9 +5096,12 @@ function appendBandageAlignmentSpans(group, node, geometry) {
       svgEl("path", {
         class: "bandage-query-hit-block",
         d: path,
+        fill: "none",
         stroke: color,
         style: `stroke: ${color}`,
         "stroke-width": blockWidth,
+        "stroke-linecap": "butt",
+        "stroke-linejoin": "round",
         "data-read": span.qseqid || "",
       }),
     );

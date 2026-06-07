@@ -7,12 +7,12 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GFA Editor v1.2.1</title>
-    <link rel="stylesheet" href="/styles.css?v=20260607-v121" />
+    <title>GFA Editor v1.2.2</title>
+    <link rel="stylesheet" href="/styles.css?v=20260607-v122" />
     <script src="/vendor/cytoscape.min.js"></script>
     <script src="/vendor/d3.min.js"></script>
     <script src="/vendor/lucide.min.js"></script>
-    <script src="/app.js?v=20260607-v121" defer></script>
+    <script src="/app.js?v=20260607-v122" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -20,7 +20,7 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
         <div class="brand">
           <img class="brand-icon" src="/app-icon.png" alt="" />
           <div>
-            <h1>GFA Editor v1.2.1</h1>
+            <h1>GFA Editor v1.2.2</h1>
             <span id="source-name">No GFA loaded</span>
           </div>
         </div>
@@ -416,20 +416,22 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
                 <i data-lucide="file-output"></i>
               </button>
               <div id="export-menu-panel" class="display-popover export-popover" hidden>
-                <label class="field">
-                  <span>Format</span>
-                  <select id="export-format">
-                    <option value="gfa">GFA</option>
-                    <option value="fasta">FASTA</option>
-                    <option value="svg">SVG image</option>
-                  </select>
-                </label>
-                <button id="export-button" class="primary-button full" type="button" title="Choose export path and filename" disabled>
-                  <i data-lucide="folder-down"></i><span>Save graph...</span>
-                </button>
-                <button id="export-svg-button" class="tool-button full" type="button" title="Save current view as SVG" disabled>
-                  <i data-lucide="image-down"></i><span>Save SVG view...</span>
-                </button>
+                <div class="button-row">
+                  <button id="export-gfa-button" class="primary-button" type="button" title="Save current graph as GFA" disabled>
+                    <i data-lucide="file-down"></i><span>GFA</span>
+                  </button>
+                  <button id="export-fasta-button" class="primary-button" type="button" title="Save current graph as FASTA" disabled>
+                    <i data-lucide="file-down"></i><span>FASTA</span>
+                  </button>
+                </div>
+                <div class="button-row">
+                  <button id="export-svg-button" class="tool-button" type="button" title="Save current view as SVG" disabled>
+                    <i data-lucide="image-down"></i><span>SVG</span>
+                  </button>
+                  <button id="export-pdf-button" class="tool-button" type="button" title="Save current view as PDF" disabled>
+                    <i data-lucide="file-down"></i><span>PDF</span>
+                  </button>
+                </div>
                 <div class="button-row">
                   <button id="export-selected-button" class="tool-button" type="button" title="Export selected links" disabled>
                     <i data-lucide="download"></i><span>Selected...</span>

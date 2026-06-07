@@ -899,7 +899,7 @@ button svg,
 .bandage-label-outline {
   paint-order: stroke;
   stroke: #fbfcf8;
-  stroke-width: 4px;
+  stroke-width: 1px;
   stroke-linejoin: round;
 }
 
