@@ -2,7 +2,7 @@
   <img src="frontend/app-icon.png" alt="GFA Editor app icon" width="96">
 </p>
 
-# GFA Editor v1.2
+# GFA Editor v1.2.1
 
 GFA Editor is a local Bandage-style viewer and editor for GFA assembly graphs. It provides Cose, Band, and Twin visualization modes, graph editing, alignment visualization, local/server file management, and GFA, FASTA, and SVG export.
 
@@ -56,9 +56,10 @@ Replace `8000` with the actual port. If you do not want to stop that process, st
 2. Use the Cose, Band, and Twin buttons in the top toolbar to switch visualization modes.
 3. Use Display, Filters, Drawing, Labels, and Files to adjust rendering, filtering, drawing scope, labels, and file sources.
 4. Select a contig or link in the graph, then inspect and edit it in the right Inspector panel.
-5. Top toolbar actions include Undo, Redo, Delete, Delete All Selected, Duplicate, Merge, Rotate, and Repeat resolution.
-6. The left Alignments panel can run or import alignment results. Use `f`, `b`, and the color picker to control each query.
-7. The export controls on the top right support GFA, FASTA, current-view SVG, selected subgraph export, and edit history JSON.
+5. Hold Shift and drag on empty graph space to marquee-select multiple graph items. Band and Twin Band view select both contigs and links inside the selection box.
+6. Top toolbar actions include Undo, Redo, Delete, Delete All Selected, Duplicate, Merge, Rotate, and Repeat resolution.
+7. The left Alignments panel can run or import alignment results. Use `f`, `b`, and the color picker to control each query.
+8. The export controls on the top right support GFA, FASTA, current-view SVG, selected subgraph export, and edit history JSON.
 
 For detailed usage, see [docs/user_manual.md](docs/user_manual.md).
 

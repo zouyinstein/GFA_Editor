@@ -822,6 +822,17 @@ button svg,
   cursor: grabbing;
 }
 
+.graph.bandage-selecting .bandage-svg {
+  cursor: crosshair;
+}
+
+.bandage-marquee {
+  fill: rgba(63, 103, 177, 0.12);
+  stroke: rgba(63, 103, 177, 0.72);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
 .bandage-link {
   fill: none;
   stroke-linecap: butt;

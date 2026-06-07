@@ -59,6 +59,7 @@ const bandageState = {
   visibleEdgeIds: new Set(),
   transform: { x: 0, y: 0, scale: 1 },
   pointer: { down: false, mode: "pan", id: null, lastX: 0, lastY: 0 },
+  marquee: null,
   layoutSeed: 1,
   lengthScale: null,
 };
@@ -2249,6 +2250,15 @@ function syncGraphElements(elements, relayout) {
 function cytoscapeStyle() {
   return [
     {
+      selector: "core",
+      style: {
+        "selection-box-color": "#3f67b1",
+        "selection-box-border-color": "#3f67b1",
+        "selection-box-opacity": 0.12,
+        "selection-box-border-width": 1,
+      },
+    },
+    {
       selector: "node",
       style: {
         label: "data(renderLabel)",
@@ -2984,13 +2994,27 @@ function bindBandageSvgEvents() {
     event.preventDefault();
     svg.setPointerCapture(event.pointerId);
     const hit = getBandageEventTarget(event.target);
+    const marqueePoint = bandageSvgPoint(event);
+    const useMarquee = event.shiftKey && !hit;
     bandageState.pointer = {
       down: true,
-      mode: hit?.kind === "node" ? "node" : "pan",
+      mode: useMarquee ? "marquee" : hit?.kind === "node" ? "node" : "pan",
       id: hit?.kind === "node" ? hit.id : null,
       lastX: event.clientX,
       lastY: event.clientY,
     };
+    if (useMarquee) {
+      bandageState.marquee = {
+        active: true,
+        startX: marqueePoint.x,
+        startY: marqueePoint.y,
+        currentX: marqueePoint.x,
+        currentY: marqueePoint.y,
+      };
+      dom.graph.classList.add("bandage-selecting");
+      renderBandageSvg();
+      return;
+    }
     if (hit) {
       const additive = event.shiftKey || event.metaKey || event.ctrlKey;
       updateBandageSelection(hit, additive);
@@ -3017,6 +3041,13 @@ function bindBandageSvgEvents() {
     const dy = event.clientY - pointer.lastY;
     pointer.lastX = event.clientX;
     pointer.lastY = event.clientY;
+    if (pointer.mode === "marquee") {
+      const point = bandageSvgPoint(event);
+      bandageState.marquee.currentX = point.x;
+      bandageState.marquee.currentY = point.y;
+      renderBandageSvg();
+      return;
+    }
     if (pointer.mode === "node" && pointer.id) {
       const node = bandageState.nodes.get(pointer.id);
       if (node) {
@@ -3038,8 +3069,18 @@ function bindBandageSvgEvents() {
 
   svg.addEventListener("pointerup", (event) => {
     if (!usesBandageRenderer()) return;
+    const pointer = bandageState.pointer;
+    if (pointer.mode === "marquee") {
+      const selection = bandageItemsInMarquee(bandageState.marquee);
+      bandageState.marquee = null;
+      if (selection.nodeIds.length || selection.edgeIds.length) {
+        addBandageSelectionSet(selection, true);
+        syncCytoscapeSelectionSetsFromBandage(selection, true);
+      }
+      renderBandageSelection();
+    }
     bandageState.pointer.down = false;
-    dom.graph.classList.remove("bandage-dragging");
+    dom.graph.classList.remove("bandage-dragging", "bandage-selecting");
     try {
       svg.releasePointerCapture(event.pointerId);
     } catch {
@@ -3049,7 +3090,9 @@ function bindBandageSvgEvents() {
 
   svg.addEventListener("pointercancel", () => {
     bandageState.pointer.down = false;
-    dom.graph.classList.remove("bandage-dragging");
+    bandageState.marquee = null;
+    dom.graph.classList.remove("bandage-dragging", "bandage-selecting");
+    renderBandageSvg();
   });
 
   svg.addEventListener(
@@ -4500,6 +4543,7 @@ function renderBandageSvg() {
 
   viewport.append(linksLayer, contigsLayer);
   svg.appendChild(viewport);
+  appendBandageMarquee(svg);
 }
 
 function appendBandageAlignmentSpans(group, node, geometry) {
@@ -5264,6 +5308,129 @@ function getBandageEventTarget(target) {
   };
 }
 
+function bandageSvgPoint(event) {
+  const rect = dom.bandageSvg.getBoundingClientRect();
+  return {
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+  };
+}
+
+function appendBandageMarquee(svg) {
+  if (!bandageState.marquee?.active) return;
+  const rect = bandageMarqueeScreenRect(bandageState.marquee);
+  svg.appendChild(svgEl("rect", {
+    class: "bandage-marquee",
+    x: rect.x,
+    y: rect.y,
+    width: rect.width,
+    height: rect.height,
+  }));
+}
+
+function bandageMarqueeScreenRect(marquee) {
+  const x = Math.min(marquee.startX, marquee.currentX);
+  const y = Math.min(marquee.startY, marquee.currentY);
+  return {
+    x,
+    y,
+    width: Math.abs(marquee.currentX - marquee.startX),
+    height: Math.abs(marquee.currentY - marquee.startY),
+  };
+}
+
+function bandageMarqueeWorldRect(marquee) {
+  const screenRect = bandageMarqueeScreenRect(marquee);
+  const topLeft = screenPointToWorld(screenRect.x, screenRect.y);
+  const bottomRight = screenPointToWorld(screenRect.x + screenRect.width, screenRect.y + screenRect.height);
+  return {
+    minX: Math.min(topLeft.x, bottomRight.x),
+    maxX: Math.max(topLeft.x, bottomRight.x),
+    minY: Math.min(topLeft.y, bottomRight.y),
+    maxY: Math.max(topLeft.y, bottomRight.y),
+  };
+}
+
+function bandageItemsInMarquee(marquee) {
+  const emptySelection = { nodeIds: [], edgeIds: [] };
+  if (!marquee?.active) return emptySelection;
+  const screenRect = bandageMarqueeScreenRect(marquee);
+  if (screenRect.width < 4 || screenRect.height < 4) return emptySelection;
+  const worldRect = bandageMarqueeWorldRect(marquee);
+  const nodeIds = getClientNodes()
+    .filter((node) => bandageState.visibleNodeIds.has(node.id))
+    .filter((node) => {
+      const geometry = getGlyphGeometry(node.id);
+      if (!geometry) return false;
+      return glyphIntersectsRect(geometry, worldRect);
+    })
+    .map((node) => node.id);
+  const edgeIds = getClientEdges()
+    .filter((edge) => bandageState.visibleEdgeIds.has(edge.id))
+    .filter((edge) => {
+      const geometry = getLinkGeometry(edge);
+      if (!geometry) return false;
+      return quadraticIntersectsRect(geometry.source, geometry.control, geometry.target, worldRect);
+    })
+    .map((edge) => edge.id);
+  return { nodeIds, edgeIds };
+}
+
+function glyphIntersectsRect(geometry, rect) {
+  const expandedRect = expandRect(rect, geometry.width / 2 + 2);
+  if (geometry.points?.length > 2) {
+    return polylineIntersectsRect(geometry.points, expandedRect);
+  }
+  return quadraticIntersectsRect(geometry.start, geometry.control, geometry.end, expandedRect);
+}
+
+function polylineIntersectsRect(points, rect) {
+  for (let index = 0; index < points.length; index += 1) {
+    if (pointInRect(points[index], rect)) return true;
+    if (index > 0 && segmentIntersectsRect(points[index - 1], points[index], rect)) return true;
+  }
+  return false;
+}
+
+function expandRect(rect, padding) {
+  return {
+    minX: rect.minX - padding,
+    maxX: rect.maxX + padding,
+    minY: rect.minY - padding,
+    maxY: rect.maxY + padding,
+  };
+}
+
+function quadraticIntersectsRect(source, control, target, rect) {
+  const points = quadraticSamplePoints(source, control, target, 24);
+  for (let index = 0; index < points.length; index += 1) {
+    if (pointInRect(points[index], rect)) return true;
+    if (index > 0 && segmentIntersectsRect(points[index - 1], points[index], rect)) return true;
+  }
+  return false;
+}
+
+function pointInRect(point, rect) {
+  return point.x >= rect.minX
+    && point.x <= rect.maxX
+    && point.y >= rect.minY
+    && point.y <= rect.maxY;
+}
+
+function segmentIntersectsRect(start, end, rect) {
+  if (pointInRect(start, rect) || pointInRect(end, rect)) return true;
+  const topLeft = { x: rect.minX, y: rect.minY };
+  const topRight = { x: rect.maxX, y: rect.minY };
+  const bottomRight = { x: rect.maxX, y: rect.maxY };
+  const bottomLeft = { x: rect.minX, y: rect.maxY };
+  return (
+    segmentsIntersect(start, end, topLeft, topRight) ||
+    segmentsIntersect(start, end, topRight, bottomRight) ||
+    segmentsIntersect(start, end, bottomRight, bottomLeft) ||
+    segmentsIntersect(start, end, bottomLeft, topLeft)
+  );
+}
+
 function syncCytoscapeSelectionFromBandage(selection, additive = false, selectedNow = true) {
   if (!isTwinMode() || !cy || !selection) return;
   const element = cy.getElementById(selection.id);
@@ -5275,6 +5442,17 @@ function syncCytoscapeSelectionFromBandage(selection, additive = false, selected
   } else if (element.length) {
     element.unselect();
   }
+}
+
+function syncCytoscapeSelectionSetsFromBandage(selection, additive = false) {
+  if (!isTwinMode() || !cy || (!selection.nodeIds.length && !selection.edgeIds.length)) return;
+  if (!additive) {
+    cy.elements().unselect();
+  }
+  [...selection.nodeIds, ...selection.edgeIds].forEach((id) => {
+    const element = cy.getElementById(id);
+    if (element.length) element.select();
+  });
 }
 
 function syncBandageSelectionFromCytoscape() {
@@ -5315,6 +5493,22 @@ function updateBandageSelection(item, additive = false) {
   }
   selectedIds.add(item.id);
   bandageState.selected = item;
+}
+
+function addBandageSelectionSet(selection, additive = false) {
+  const nodeIds = [...new Set((selection.nodeIds || []).filter(Boolean))];
+  const edgeIds = [...new Set((selection.edgeIds || []).filter(Boolean))];
+  if (!nodeIds.length && !edgeIds.length) return;
+  if (!additive) {
+    clearBandageSelection();
+  }
+  nodeIds.forEach((id) => bandageState.selectedNodeIds.add(id));
+  edgeIds.forEach((id) => bandageState.selectedEdgeIds.add(id));
+  if (nodeIds.length) {
+    bandageState.selected = { kind: "node", id: nodeIds[nodeIds.length - 1] };
+  } else {
+    bandageState.selected = { kind: "edge", id: edgeIds[edgeIds.length - 1] };
+  }
 }
 
 function clearBandageSelection() {

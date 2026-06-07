@@ -1,6 +1,6 @@
-# GFA Editor v1.2 User Manual
+# GFA Editor v1.2.1 User Manual
 
-This manual describes the main tools and workflows in GFA Editor v1.2. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
+This manual describes the main tools and workflows in GFA Editor v1.2.1. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
 
 ## 1. Start, Stop, and Data Safety
 
@@ -39,7 +39,7 @@ By default, GFA Editor only reads and writes data on your local machine. It inte
 
 ## 2. Interface Layout
 
-The top bar shows the app icon, `GFA Editor v1.2`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
+The top bar shows the app icon, `GFA Editor v1.2.1`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
 
 The left panel contains Stats, Import, Labels, and Alignments.
 
@@ -91,6 +91,8 @@ Files contains local server data and SFTP actions. You can refresh the file list
 ## 6. Selection and Inspector
 
 Click a contig or link to select it. Multi-selection support and available actions depend on the current view and selection.
+
+In Cose, Band, and the Band side of Twin view, hold Shift and drag on empty graph space to marquee-select multiple graph items. Band and Twin Band view select both contigs and links inside the selection box.
 
 Inspector shows ID, label, length, depth, degree, support, CIGAR, tags, and available best alignment or path information.
 
