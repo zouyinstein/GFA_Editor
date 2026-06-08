@@ -891,7 +891,13 @@ def cache_sftp_file(sftp, remote_path: str, source_name: str) -> Path:
     return cache_path
 
 
-def parse_cached_gfa(cache_path: Path, source_name: str, keep_sequences: bool) -> LoadedGfa:
+def parse_cached_gfa(
+    cache_path: Path,
+    source_name: str,
+    keep_sequences: bool,
+    *,
+    keep_other_records: bool = True,
+) -> LoadedGfa:
     start = time.monotonic()
     try:
         with cache_path.open("rb") as handle:
@@ -899,6 +905,7 @@ def parse_cached_gfa(cache_path: Path, source_name: str, keep_sequences: bool) -
                 handle,
                 keep_sequences=keep_sequences,
                 sequence_time_limit_seconds=SEQUENCE_LOAD_TIMEOUT_SECONDS if keep_sequences else None,
+                keep_other_records=keep_other_records,
             )
     except ValueError:
         raise
@@ -922,8 +929,19 @@ def parse_cached_gfa(cache_path: Path, source_name: str, keep_sequences: bool) -
     )
 
 
-def load_cached_gfa(cache_path: Path, source_name: str, keep_sequences: bool) -> LoadedGfa:
-    return parse_cached_gfa(cache_path, source_name, keep_sequences)
+def load_cached_gfa(
+    cache_path: Path,
+    source_name: str,
+    keep_sequences: bool,
+    *,
+    keep_other_records: bool = True,
+) -> LoadedGfa:
+    return parse_cached_gfa(
+        cache_path,
+        source_name,
+        keep_sequences,
+        keep_other_records=keep_other_records,
+    )
 
 
 def subgraph_from_node_ids(graph: GfaGraph, node_ids: List[str]) -> GfaGraph:
@@ -940,7 +958,10 @@ def subgraph_from_node_ids(graph: GfaGraph, node_ids: List[str]) -> GfaGraph:
             for link in graph.links
             if link.source in node_id_set and link.target in node_id_set
         ],
-        other_records=copy.deepcopy(graph.other_records),
+        # hifiasm can emit hundreds of thousands of A records. They are not
+        # rendered or exported by the editor, so duplicating them into every
+        # split component dominates large-file load time.
+        other_records=[],
         dropped_sequences=graph.dropped_sequences,
     )
 
@@ -1066,9 +1087,20 @@ def build_split_components(
     return split_components, warning
 
 
-def load_uploaded_gfa(file: UploadFile, source_name: str, keep_sequences: bool) -> LoadedGfa:
+def load_uploaded_gfa(
+    file: UploadFile,
+    source_name: str,
+    keep_sequences: bool,
+    *,
+    keep_other_records: bool = True,
+) -> LoadedGfa:
     cache_path = cache_upload_file(file, source_name)
-    return load_cached_gfa(cache_path, source_name, keep_sequences)
+    return load_cached_gfa(
+        cache_path,
+        source_name,
+        keep_sequences,
+        keep_other_records=keep_other_records,
+    )
 
 
 def resolve_server_data_path(relative_path: str, *, must_exist: bool = False) -> Path:
@@ -1410,9 +1442,9 @@ class SftpTransferRequest(BaseModel):
 
 
 app = FastAPI(
-    title="GFA Editor v1.2.3",
+    title="GFA Editor v1.2.4",
     description="A local Bandage-style GFA graph editor.",
-    version="1.2.3",
+    version="1.2.4",
 )
 
 app.add_middleware(
@@ -1444,7 +1476,7 @@ async def bind_editor_session(request: Request, call_next):
 
 @app.get("/api/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok", "version": "1.2.3", "instance_id": INSTANCE_ID}
+    return {"status": "ok", "version": "1.2.4", "instance_id": INSTANCE_ID}
 
 
 @app.post("/api/upload")
@@ -1456,7 +1488,13 @@ async def upload_gfa(
 ) -> Dict[str, Any]:
     source_name = file.filename or "uploaded.gfa"
     try:
-        loaded = await asyncio.to_thread(load_uploaded_gfa, file, source_name, keep_sequences)
+        loaded = await asyncio.to_thread(
+            load_uploaded_gfa,
+            file,
+            source_name,
+            keep_sequences,
+            keep_other_records=not auto_split,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return session.load(
@@ -1508,7 +1546,12 @@ def load_server_file(payload: ServerFileRequest) -> Dict[str, Any]:
     source_name = f"server:{relative_path}"
     try:
         cache_path = cache_local_file(path, relative_path)
-        loaded = load_cached_gfa(cache_path, source_name, payload.keep_sequences)
+        loaded = load_cached_gfa(
+            cache_path,
+            source_name,
+            payload.keep_sequences,
+            keep_other_records=not payload.auto_split,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return session.load(
@@ -1552,7 +1595,12 @@ def sftp_download(payload: SftpTransferRequest) -> Dict[str, Any]:
     source_name = f"sftp:{payload.host.strip()}:{payload.remote_path.strip()}"
     try:
         cache_path = cache_sftp_file(sftp, payload.remote_path.strip(), payload.remote_path.strip())
-        loaded = load_cached_gfa(cache_path, source_name, payload.keep_sequences)
+        loaded = load_cached_gfa(
+            cache_path,
+            source_name,
+            payload.keep_sequences,
+            keep_other_records=not payload.auto_split,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:

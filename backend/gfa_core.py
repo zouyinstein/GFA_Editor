@@ -18,6 +18,9 @@ LINK_SUPPORT_TAGS = ("RC", "ec", "EC", "FC", "KC")
 CUSTOM_COLOR_TAG = "CL"
 CUSTOM_LABEL_TAG = "LB"
 _COMPLEMENT = str.maketrans("ACGTRYKMSWBDHVNacgtrykmswbdhvn", "TGCAYRMKSWVHDBNtgcayrmkswvhdbn")
+_BLANK_BYTE_LINES = (b"\n", b"\r\n")
+_BLANK_TEXT_LINES = ("\n", "\r\n")
+_CORE_RECORD_BYTES = (b"H", b"S", b"L")
 
 
 def _coerce_number(value: Any) -> Optional[float]:
@@ -418,6 +421,7 @@ def parse_gfa_lines(
     lines: Iterable[Any],
     keep_sequences: bool = False,
     sequence_time_limit_seconds: Optional[float] = None,
+    keep_other_records: bool = True,
 ) -> GfaGraph:
     graph = GfaGraph(dropped_sequences=not keep_sequences)
     edge_index = 0
@@ -430,10 +434,14 @@ def parse_gfa_lines(
     )
     for line_number, raw_line in enumerate(lines, start=1):
         if isinstance(raw_line, bytes):
+            if not raw_line or raw_line in _BLANK_BYTE_LINES:
+                continue
+            if not keep_other_records and raw_line[:1] not in _CORE_RECORD_BYTES:
+                continue
             raw_line = raw_line.decode("utf-8", errors="replace")
         elif not isinstance(raw_line, str):
             raw_line = str(raw_line)
-        if not raw_line.strip():
+        if not raw_line or raw_line in _BLANK_TEXT_LINES:
             continue
         fields = raw_line.rstrip("\r\n").split("\t")
         record_type = fields[0]
@@ -492,7 +500,8 @@ def parse_gfa_lines(
             graph.links.append(link)
             edge_index += 1
             continue
-        graph.other_records.append(fields)
+        if keep_other_records:
+            graph.other_records.append(fields)
     return graph
 
 
@@ -500,11 +509,13 @@ def parse_gfa_text(
     text: str,
     keep_sequences: bool = False,
     sequence_time_limit_seconds: Optional[float] = None,
+    keep_other_records: bool = True,
 ) -> GfaGraph:
     return parse_gfa_lines(
         text.splitlines(),
         keep_sequences=keep_sequences,
         sequence_time_limit_seconds=sequence_time_limit_seconds,
+        keep_other_records=keep_other_records,
     )
 
 
