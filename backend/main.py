@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import contextvars
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import io
 import json
@@ -18,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -30,6 +32,7 @@ from pydantic import BaseModel
 from .gfa_core import (
     GfaGraph,
     attach_blast_hits,
+    deduplicate_links,
     delete_edge,
     delete_node,
     delete_selection,
@@ -38,6 +41,7 @@ from .gfa_core import (
     export_gfa,
     merge_link,
     merge_selection,
+    parse_gfa_lines,
     parse_alignment_text,
     parse_blast_outfmt6,
     parse_gfa_text,
@@ -59,6 +63,10 @@ FRONTEND_DIR = Path(os.environ.get("GFA_EDITOR_FRONTEND_DIR", ROOT_DIR / "fronte
 SERVER_DATA_DIR = Path(os.environ.get("GFA_EDITOR_DATA_DIR", ROOT_DIR / "server_data")).expanduser()
 INSTANCE_ID = os.environ.get("GFA_EDITOR_INSTANCE_ID", "")
 SERVER_FILE_EXTENSIONS = {".gfa", ".txt"}
+SEQUENCE_LOAD_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("GFA_EDITOR_SEQUENCE_LOAD_TIMEOUT_SECONDS", "10")))
+DEFAULT_SPLIT_MAX_ELEMENTS = max(1, int(os.environ.get("GFA_EDITOR_SPLIT_MAX_ELEMENTS", "100000")))
+DEFAULT_SPLIT_NODE_THRESHOLD = max(1, int(os.environ.get("GFA_EDITOR_SPLIT_NODE_THRESHOLD", "200")))
+CACHE_DIR_NAME = ".gfa-editor-cache"
 SESSION_HEADER = "X-GFA-Session-Id"
 SESSION_COOKIE = "gfa_editor_session"
 DEFAULT_SESSION_ID = "default"
@@ -76,6 +84,12 @@ class SessionState:
     graph: Optional[GfaGraph]
     edit_steps: List[Dict[str, Any]]
     source_name: Optional[str]
+    sequence_source_path: Optional[str]
+    sequence_source_name: Optional[str]
+    sequence_source_size: Optional[int]
+    light_mode: bool
+    light_mode_reason: Optional[str]
+    sequence_load_seconds: Optional[float]
     alignment_hits_by_query: Dict[str, List[Dict[str, Any]]]
     alignment_format: Optional[str]
     alignment_target_role: str
@@ -84,6 +98,36 @@ class SessionState:
     alignment_last_command: Optional[str]
     alignment_last_stderr: Optional[str]
     active_operation_state_index: Optional[int]
+
+
+@dataclass
+class LoadedGfa:
+    graph: GfaGraph
+    cache_path: Path
+    light_mode: bool
+    light_mode_reason: Optional[str]
+    sequence_load_seconds: float
+    source_size: int
+
+
+@dataclass
+class SplitComponentState:
+    id: str
+    label: str
+    export_suffix: str
+    original_node_ids: List[str]
+    is_remaining_group: bool
+    graph: GfaGraph
+    edit_steps: List[Dict[str, Any]] = field(default_factory=list)
+    log: List[Dict[str, Any]] = field(default_factory=list)
+    undo_stack: List[SessionState] = field(default_factory=list)
+    redo_stack: List[SessionState] = field(default_factory=list)
+    operation_states: List[SessionState] = field(default_factory=list)
+    active_operation_state_index: Optional[int] = None
+    history_trace_snapshots: List[Tuple[GfaGraph, List[Dict[str, Any]]]] = field(default_factory=list)
+    history_trace: List[Dict[str, Any]] = field(default_factory=list)
+    history_trace_index: Optional[int] = None
+    version: int = 1
 
 
 class EditorSession:
@@ -101,6 +145,12 @@ class EditorSession:
         self.history_trace_index: Optional[int] = None
         self.version = 0
         self.source_name: Optional[str] = None
+        self.sequence_source_path: Optional[str] = None
+        self.sequence_source_name: Optional[str] = None
+        self.sequence_source_size: Optional[int] = None
+        self.light_mode = False
+        self.light_mode_reason: Optional[str] = None
+        self.sequence_load_seconds: Optional[float] = None
         self.alignment_hits_by_query: Dict[str, List[Dict[str, Any]]] = {}
         self.alignment_format: Optional[str] = None
         self.alignment_target_role: str = "subject"
@@ -108,16 +158,88 @@ class EditorSession:
         self.alignment_selected_read_id: Optional[str] = None
         self.alignment_last_command: Optional[str] = None
         self.alignment_last_stderr: Optional[str] = None
+        self.split_enabled = False
+        self.split_max_elements_per_view = DEFAULT_SPLIT_MAX_ELEMENTS
+        self.split_original_file_name: Optional[str] = None
+        self.split_original_node_count = 0
+        self.split_original_link_count = 0
+        self.split_components: List[SplitComponentState] = []
+        self.selected_component_id: Optional[str] = None
+        self.split_warning: Optional[str] = None
 
     def has_graph(self) -> GfaGraph:
         if self.graph is None:
             raise HTTPException(status_code=409, detail="No GFA graph is loaded")
         return self.graph
 
-    def load(self, graph: GfaGraph, source_name: str) -> Dict[str, Any]:
+    def sequence_cache_ready(self) -> bool:
+        return bool(self.sequence_source_path and Path(self.sequence_source_path).is_file())
+
+    def graph_with_sequences(self) -> GfaGraph:
+        graph = self.has_graph()
+        if not graph.dropped_sequences:
+            return graph
+        if not self.sequence_source_path:
+            raise HTTPException(
+                status_code=409,
+                detail="This graph is in light mode but no original GFA cache is available for sequence rebuild.",
+            )
+        source_path = Path(self.sequence_source_path)
+        if not source_path.is_file():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Original GFA cache is missing: {source_path}",
+            )
+        try:
+            with source_path.open("rb") as handle:
+                rebuilt = parse_gfa_lines(handle, keep_sequences=True)
+            if self.split_enabled:
+                component = self._selected_split_component()
+                if component is not None:
+                    rebuilt = subgraph_from_node_ids(rebuilt, component.original_node_ids)
+            if self.edit_steps:
+                apply_edit_history(rebuilt, {"steps": self.edit_steps})
+            deduplicate_links(rebuilt)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=f"Could not rebuild sequences from original GFA: {exc}") from exc
+        return rebuilt
+
+    def load(
+        self,
+        graph: GfaGraph,
+        source_name: str,
+        *,
+        sequence_source_path: Optional[Path] = None,
+        sequence_source_size: Optional[int] = None,
+        light_mode: bool = False,
+        light_mode_reason: Optional[str] = None,
+        sequence_load_seconds: Optional[float] = None,
+        auto_split: bool = True,
+        max_elements_per_view: int = DEFAULT_SPLIT_MAX_ELEMENTS,
+    ) -> Dict[str, Any]:
         previous_state = self._capture_state() if self.graph is not None else None
-        self.graph = graph
-        self.undo_stack = [previous_state] if previous_state is not None else []
+        deduplicate_links(graph)
+        max_elements_per_view = max(1, int(max_elements_per_view or DEFAULT_SPLIT_MAX_ELEMENTS))
+        split_components, split_warning = build_split_components(
+            graph,
+            max_elements_per_view=max_elements_per_view,
+            auto_split=auto_split,
+        )
+        self._clear_split()
+        if split_components:
+            self.split_enabled = True
+            self.split_max_elements_per_view = max_elements_per_view
+            self.split_original_file_name = source_name
+            self.split_original_node_count = len(graph.segments)
+            self.split_original_link_count = len(graph.links)
+            self.split_components = split_components
+            self.selected_component_id = split_components[0].id
+            self.split_warning = split_warning
+            self.graph = split_components[0].graph.clone()
+            split_components[0].graph = self.graph.clone()
+        else:
+            self.graph = graph
+        self.undo_stack = [] if split_components else ([previous_state] if previous_state is not None else [])
         self.redo_stack.clear()
         self.edit_steps.clear()
         self._clear_history_trace()
@@ -127,11 +249,21 @@ class EditorSession:
         self.active_operation_state_index = None
         self.version = 1
         self.source_name = source_name
+        self.sequence_source_path = str(sequence_source_path) if sequence_source_path is not None else None
+        self.sequence_source_name = source_name if sequence_source_path is not None else None
+        self.sequence_source_size = sequence_source_size
+        self.light_mode = light_mode
+        self.light_mode_reason = light_mode_reason
+        self.sequence_load_seconds = sequence_load_seconds
         self._append_log("upload", {"source_name": source_name, "edit_step_count": 0})
+        self._save_selected_split_component()
         return self.snapshot()
 
     def snapshot(self, include_sequences: bool = False) -> Dict[str, Any]:
         graph = self.has_graph()
+        if deduplicate_links(graph):
+            self._refresh_alignment()
+        self._save_selected_split_component()
         payload = graph.to_client(include_sequences=include_sequences)
         payload["session"] = {
             "version": self.version,
@@ -144,8 +276,143 @@ class EditorSession:
             "history_trace": self.history_trace,
             "history_trace_index": self.history_trace_index,
             "alignment": self.alignment_summary(),
+            "light_mode": self.light_mode,
+            "light_mode_reason": self.light_mode_reason,
+            "sequence_cache_ready": self.sequence_cache_ready(),
+            "sequence_source_name": self.sequence_source_name,
+            "sequence_source_size": self.sequence_source_size,
+            "sequence_load_seconds": self.sequence_load_seconds,
+            "split": self._split_summary(),
         }
         return payload
+
+    def select_split_component(self, component_id: str) -> Dict[str, Any]:
+        self.has_graph()
+        if not self.split_enabled:
+            raise HTTPException(status_code=409, detail="No large-graph split is active")
+        component = self._split_component_by_id(component_id)
+        if component is None:
+            raise HTTPException(status_code=404, detail=f"Subgraph not found: {component_id}")
+        if component.id == self.selected_component_id:
+            return self.snapshot()
+        self._save_selected_split_component()
+        self.selected_component_id = component.id
+        self._restore_split_component(component)
+        return self.snapshot()
+
+    def default_export_filename(self, extension: str, *, selection: bool = False) -> str:
+        source_name = strip_server_prefix(self.split_original_file_name or self.source_name or "edited")
+        stem = Path(source_name).stem or "edited"
+        component = self._selected_split_component()
+        if component is not None:
+            kind = "selected-links" if selection else "edited"
+            return f"{stem}.{component.export_suffix}.{kind}.{extension}"
+        kind = "selected-links" if selection else "edited"
+        return f"{stem}.{kind}.{extension}"
+
+    def default_server_export_path(self, extension: str) -> str:
+        filename = self.default_export_filename(extension)
+        component = self._selected_split_component()
+        if component is None:
+            return filename
+        source_name = strip_server_prefix(self.split_original_file_name or self.source_name or "edited")
+        stem = Path(source_name).stem or "edited"
+        return f"{stem}.components/{filename}"
+
+    def _clear_split(self) -> None:
+        self.split_enabled = False
+        self.split_max_elements_per_view = DEFAULT_SPLIT_MAX_ELEMENTS
+        self.split_original_file_name = None
+        self.split_original_node_count = 0
+        self.split_original_link_count = 0
+        self.split_components.clear()
+        self.selected_component_id = None
+        self.split_warning = None
+
+    def _split_component_by_id(self, component_id: Optional[str]) -> Optional[SplitComponentState]:
+        if not component_id:
+            return None
+        return next((component for component in self.split_components if component.id == component_id), None)
+
+    def _selected_split_component(self) -> Optional[SplitComponentState]:
+        if not self.split_enabled:
+            return None
+        return self._split_component_by_id(self.selected_component_id)
+
+    def _clone_state_list(self, states: List[SessionState]) -> List[SessionState]:
+        return [self._clone_state(state) for state in states]
+
+    def _clone_history_trace_snapshots(self) -> List[Tuple[GfaGraph, List[Dict[str, Any]]]]:
+        return [
+            (graph.clone(), copy.deepcopy(steps))
+            for graph, steps in self.history_trace_snapshots
+        ]
+
+    def _save_selected_split_component(self) -> None:
+        component = self._selected_split_component()
+        if component is None or self.graph is None:
+            return
+        component.graph = self.graph.clone()
+        component.edit_steps = copy.deepcopy(self.edit_steps)
+        component.log = copy.deepcopy(self.log)
+        component.undo_stack = self._clone_state_list(self.undo_stack)
+        component.redo_stack = self._clone_state_list(self.redo_stack)
+        component.operation_states = self._clone_state_list(self.operation_states)
+        component.active_operation_state_index = self.active_operation_state_index
+        component.history_trace_snapshots = self._clone_history_trace_snapshots()
+        component.history_trace = copy.deepcopy(self.history_trace)
+        component.history_trace_index = self.history_trace_index
+        component.version = self.version
+
+    def _restore_split_component(self, component: SplitComponentState) -> None:
+        self.graph = component.graph.clone()
+        self.edit_steps = copy.deepcopy(component.edit_steps)
+        self.log = copy.deepcopy(component.log)
+        self.undo_stack = self._clone_state_list(component.undo_stack)
+        self.redo_stack = self._clone_state_list(component.redo_stack)
+        self.operation_states = self._clone_state_list(component.operation_states)
+        self.active_operation_state_index = component.active_operation_state_index
+        self.history_trace_snapshots = [
+            (graph.clone(), copy.deepcopy(steps))
+            for graph, steps in component.history_trace_snapshots
+        ]
+        self.history_trace = copy.deepcopy(component.history_trace)
+        self.history_trace_index = component.history_trace_index
+        self.version = component.version
+        self._refresh_alignment()
+
+    @staticmethod
+    def _component_summary(component: SplitComponentState) -> Dict[str, Any]:
+        node_count = len(component.graph.segments)
+        link_count = len(component.graph.links)
+        return {
+            "id": component.id,
+            "label": component.label,
+            "nodeCount": node_count,
+            "linkCount": link_count,
+            "elementCount": node_count + link_count,
+            "isRemainingGroup": component.is_remaining_group,
+            "exportSuffix": component.export_suffix,
+        }
+
+    def _split_summary(self) -> Dict[str, Any]:
+        if not self.split_enabled:
+            return {"splitEnabled": False}
+        return {
+            "originalFileName": self.split_original_file_name,
+            "originalNodeCount": self.split_original_node_count,
+            "originalLinkCount": self.split_original_link_count,
+            "originalElementCount": self.split_original_node_count + self.split_original_link_count,
+            "splitEnabled": True,
+            "maxElementsPerView": self.split_max_elements_per_view,
+            "nodeSplitThreshold": DEFAULT_SPLIT_NODE_THRESHOLD,
+            "selectedComponentId": self.selected_component_id,
+            "warning": self.split_warning,
+            "components": [
+                self._component_summary(component)
+                for component in self.split_components
+            ],
+        }
 
     def mutate(self, action: str, details: Dict[str, Any], callback) -> Dict[str, Any]:
         graph = self.has_graph()
@@ -153,10 +420,13 @@ class EditorSession:
         self.redo_stack.clear()
         try:
             result = callback(graph)
+            removed_duplicate_edges = deduplicate_links(graph)
         except Exception:
             self._restore_state(self.undo_stack.pop())
             raise
         event_details = {**details, **(result or {})}
+        if removed_duplicate_edges:
+            event_details["removed_duplicate_edges"] = removed_duplicate_edges
         self._record_edit_step(action, event_details, result or {})
         event_details["edit_step_count"] = len(self.edit_steps)
         self.version += 1
@@ -435,6 +705,12 @@ class EditorSession:
             graph=self.graph.clone() if self.graph is not None else None,
             edit_steps=copy.deepcopy(self.edit_steps),
             source_name=self.source_name,
+            sequence_source_path=self.sequence_source_path,
+            sequence_source_name=self.sequence_source_name,
+            sequence_source_size=self.sequence_source_size,
+            light_mode=self.light_mode,
+            light_mode_reason=self.light_mode_reason,
+            sequence_load_seconds=self.sequence_load_seconds,
             alignment_hits_by_query=copy.deepcopy(self.alignment_hits_by_query),
             alignment_format=self.alignment_format,
             alignment_target_role=self.alignment_target_role,
@@ -451,6 +727,12 @@ class EditorSession:
             graph=state.graph.clone() if state.graph is not None else None,
             edit_steps=copy.deepcopy(state.edit_steps),
             source_name=state.source_name,
+            sequence_source_path=state.sequence_source_path,
+            sequence_source_name=state.sequence_source_name,
+            sequence_source_size=state.sequence_source_size,
+            light_mode=state.light_mode,
+            light_mode_reason=state.light_mode_reason,
+            sequence_load_seconds=state.sequence_load_seconds,
             alignment_hits_by_query=copy.deepcopy(state.alignment_hits_by_query),
             alignment_format=state.alignment_format,
             alignment_target_role=state.alignment_target_role,
@@ -465,6 +747,12 @@ class EditorSession:
         self.graph = state.graph.clone() if state.graph is not None else None
         self.edit_steps = copy.deepcopy(state.edit_steps)
         self.source_name = state.source_name
+        self.sequence_source_path = state.sequence_source_path
+        self.sequence_source_name = state.sequence_source_name
+        self.sequence_source_size = state.sequence_source_size
+        self.light_mode = state.light_mode
+        self.light_mode_reason = state.light_mode_reason
+        self.sequence_load_seconds = state.sequence_load_seconds
         self.alignment_hits_by_query = copy.deepcopy(state.alignment_hits_by_query)
         self.alignment_format = state.alignment_format
         self.alignment_target_role = state.alignment_target_role
@@ -553,6 +841,236 @@ def server_data_root() -> Path:
     return root
 
 
+def sequence_cache_root() -> Path:
+    root = server_data_root() / CACHE_DIR_NAME
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def safe_cache_stem(source_name: str) -> str:
+    stem = Path(source_name).stem or "uploaded"
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._")
+    return cleaned[:80] or "uploaded"
+
+
+def next_cache_path(source_name: str) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return sequence_cache_root() / f"{timestamp}-{uuid.uuid4().hex[:10]}-{safe_cache_stem(source_name)}.raw"
+
+
+def copy_stream_to_cache(source, source_name: str) -> Path:
+    cache_path = next_cache_path(source_name)
+    with cache_path.open("wb") as target:
+        shutil.copyfileobj(source, target, length=1024 * 1024)
+    return cache_path
+
+
+def cache_upload_file(file: UploadFile, source_name: str) -> Path:
+    file.file.seek(0)
+    cache_path = copy_stream_to_cache(file.file, source_name)
+    file.file.seek(0)
+    return cache_path
+
+
+def cache_local_file(path: Path, source_name: str) -> Path:
+    cache_path = next_cache_path(source_name)
+    shutil.copyfile(path, cache_path)
+    return cache_path
+
+
+def cache_sftp_file(sftp, remote_path: str, source_name: str) -> Path:
+    cache_path = next_cache_path(source_name)
+    with sftp.open(remote_path, "rb") as remote_file, cache_path.open("wb") as target:
+        while True:
+            chunk = remote_file.read(1024 * 1024)
+            if not chunk:
+                break
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8", errors="replace")
+            target.write(chunk)
+    return cache_path
+
+
+def parse_cached_gfa(cache_path: Path, source_name: str, keep_sequences: bool) -> LoadedGfa:
+    start = time.monotonic()
+    try:
+        with cache_path.open("rb") as handle:
+            graph = parse_gfa_lines(
+                handle,
+                keep_sequences=keep_sequences,
+                sequence_time_limit_seconds=SEQUENCE_LOAD_TIMEOUT_SECONDS if keep_sequences else None,
+            )
+    except ValueError:
+        raise
+    elapsed = time.monotonic() - start
+    light_mode = graph.dropped_sequences
+    reason = None
+    if keep_sequences and graph.dropped_sequences:
+        reason = (
+            f"Sequence loading exceeded {SEQUENCE_LOAD_TIMEOUT_SECONDS:g} seconds; "
+            "light mode is enabled and sequences will be rebuilt from the original GFA when needed."
+        )
+    elif not keep_sequences:
+        reason = "Light mode is enabled; sequences are stored in the original GFA cache and rebuilt when needed."
+    return LoadedGfa(
+        graph=graph,
+        cache_path=cache_path,
+        light_mode=light_mode,
+        light_mode_reason=reason,
+        sequence_load_seconds=elapsed,
+        source_size=cache_path.stat().st_size,
+    )
+
+
+def load_cached_gfa(cache_path: Path, source_name: str, keep_sequences: bool) -> LoadedGfa:
+    return parse_cached_gfa(cache_path, source_name, keep_sequences)
+
+
+def subgraph_from_node_ids(graph: GfaGraph, node_ids: List[str]) -> GfaGraph:
+    node_id_set = set(node_ids)
+    return GfaGraph(
+        headers=copy.deepcopy(graph.headers),
+        segments={
+            segment_id: copy.deepcopy(segment)
+            for segment_id, segment in graph.segments.items()
+            if segment_id in node_id_set
+        },
+        links=[
+            copy.deepcopy(link)
+            for link in graph.links
+            if link.source in node_id_set and link.target in node_id_set
+        ],
+        other_records=copy.deepcopy(graph.other_records),
+        dropped_sequences=graph.dropped_sequences,
+    )
+
+
+def connected_component_node_sets(graph: GfaGraph) -> List[List[str]]:
+    node_order = list(graph.segments.keys())
+    adjacency: Dict[str, List[str]] = {node_id: [] for node_id in node_order}
+    for link in graph.links:
+        if link.source not in adjacency or link.target not in adjacency:
+            continue
+        adjacency[link.source].append(link.target)
+        if link.target != link.source:
+            adjacency[link.target].append(link.source)
+
+    seen: set[str] = set()
+    components: List[List[str]] = []
+    for start_id in node_order:
+        if start_id in seen:
+            continue
+        seen.add(start_id)
+        stack = [start_id]
+        component_set = {start_id}
+        while stack:
+            node_id = stack.pop()
+            for neighbor_id in adjacency[node_id]:
+                if neighbor_id in seen:
+                    continue
+                seen.add(neighbor_id)
+                component_set.add(neighbor_id)
+                stack.append(neighbor_id)
+        components.append([node_id for node_id in node_order if node_id in component_set])
+    return components
+
+
+def count_internal_links(graph: GfaGraph, node_ids: List[str]) -> int:
+    node_id_set = set(node_ids)
+    return sum(1 for link in graph.links if link.source in node_id_set and link.target in node_id_set)
+
+
+def make_split_component(
+    graph: GfaGraph,
+    component_id: str,
+    label: str,
+    export_suffix: str,
+    node_ids: List[str],
+    *,
+    is_remaining_group: bool = False,
+) -> SplitComponentState:
+    return SplitComponentState(
+        id=component_id,
+        label=label,
+        export_suffix=export_suffix,
+        original_node_ids=list(node_ids),
+        is_remaining_group=is_remaining_group,
+        graph=subgraph_from_node_ids(graph, node_ids),
+    )
+
+
+def build_split_components(
+    graph: GfaGraph,
+    *,
+    max_elements_per_view: int,
+    auto_split: bool,
+) -> Tuple[List[SplitComponentState], Optional[str]]:
+    _ = max_elements_per_view
+    if not auto_split or len(graph.segments) <= DEFAULT_SPLIT_NODE_THRESHOLD:
+        return [], None
+
+    raw_components = []
+    for node_ids in connected_component_node_sets(graph):
+        link_count = count_internal_links(graph, node_ids)
+        raw_components.append(
+            {
+                "node_ids": node_ids,
+                "node_count": len(node_ids),
+                "link_count": link_count,
+                "element_count": len(node_ids) + link_count,
+            }
+        )
+    if not raw_components:
+        return [], None
+
+    raw_components.sort(key=lambda item: item["element_count"], reverse=True)
+    warning = None
+    if len(raw_components) == 1 and raw_components[0]["node_count"] > DEFAULT_SPLIT_NODE_THRESHOLD:
+        warning = "This graph contains one large connected component. Splitting by connectivity cannot reduce this component further."
+
+    selected = [component for component in raw_components if component["link_count"] > 1]
+    remaining = [component for component in raw_components if component["link_count"] <= 1]
+
+    split_components: List[SplitComponentState] = []
+    for index, component in enumerate(selected, start=1):
+        split_components.append(
+            make_split_component(
+                graph,
+                f"component_{index:03d}",
+                f"Component {index}",
+                f"component_{index:03d}",
+                component["node_ids"],
+            )
+        )
+
+    if remaining:
+        remaining_node_ids = set()
+        for component in remaining:
+            remaining_node_ids.update(component["node_ids"])
+        ordered_remaining_node_ids = [
+            node_id
+            for node_id in graph.segments.keys()
+            if node_id in remaining_node_ids
+        ]
+        split_components.append(
+            make_split_component(
+                graph,
+                "remaining_components",
+                "Remaining",
+                "remaining_components",
+                ordered_remaining_node_ids,
+                is_remaining_group=True,
+            )
+        )
+
+    return split_components, warning
+
+
+def load_uploaded_gfa(file: UploadFile, source_name: str, keep_sequences: bool) -> LoadedGfa:
+    cache_path = cache_upload_file(file, source_name)
+    return load_cached_gfa(cache_path, source_name, keep_sequences)
+
+
 def resolve_server_data_path(relative_path: str, *, must_exist: bool = False) -> Path:
     raw_path = Path(relative_path)
     if not relative_path or raw_path.is_absolute():
@@ -569,10 +1087,7 @@ def resolve_server_data_path(relative_path: str, *, must_exist: bool = False) ->
 
 
 def default_server_export_path(extension: str) -> str:
-    source_name = strip_server_prefix(session.source_name or "edited")
-    source_path = Path(source_name)
-    stem = source_path.stem or "edited"
-    return f"{stem}.edited.{extension}"
+    return session.default_server_export_path(extension)
 
 
 def strip_server_prefix(source_name: str) -> str:
@@ -587,9 +1102,9 @@ def normalize_export_format(format_value: str) -> str:
 
 
 def export_graph_text(format_value: str) -> Tuple[str, str]:
-    graph = session.has_graph()
     normalized_format = normalize_export_format(format_value)
     extension = "fasta" if normalized_format in {"fasta", "fa"} else "gfa"
+    graph = session.graph_with_sequences()
     try:
         body = export_fasta(graph) if normalized_format in {"fasta", "fa"} else export_gfa(graph)
     except ValueError as exc:
@@ -598,7 +1113,8 @@ def export_graph_text(format_value: str) -> Tuple[str, str]:
 
 
 def export_selected_links_text(format_value: str, edge_ids: List[str]) -> Tuple[str, str]:
-    graph = session.has_graph()
+    normalized_format = normalize_export_format(format_value)
+    graph = session.graph_with_sequences()
     selected_ids = [edge_id for edge_id in dict.fromkeys(edge_ids) if edge_id]
     if not selected_ids:
         raise HTTPException(status_code=400, detail="Select at least one link to export")
@@ -622,7 +1138,6 @@ def export_selected_links_text(format_value: str, edge_ids: List[str]) -> Tuple[
         links=selected_links,
         dropped_sequences=graph.dropped_sequences,
     )
-    normalized_format = normalize_export_format(format_value)
     extension = "fasta" if normalized_format in {"fasta", "fa"} else "gfa"
     try:
         body = export_fasta(selected_graph) if normalized_format in {"fasta", "fa"} else export_gfa(selected_graph)
@@ -712,7 +1227,7 @@ def run_alignment_command(
     query_filename: str,
     extra_args: str,
 ) -> Tuple[str, str, str, str]:
-    graph = session.has_graph()
+    graph = session.graph_with_sequences()
     try:
         target_text = export_fasta(graph)
     except ValueError as exc:
@@ -860,6 +1375,8 @@ class EdgeUpdateRequest(BaseModel):
 class ServerFileRequest(BaseModel):
     path: str
     keep_sequences: bool = False
+    auto_split: bool = True
+    max_elements_per_view: int = DEFAULT_SPLIT_MAX_ELEMENTS
 
 
 class ServerSaveRequest(BaseModel):
@@ -876,6 +1393,10 @@ class AlignmentReadSelectionRequest(BaseModel):
     read_id: Optional[str] = None
 
 
+class ComponentSelectionRequest(BaseModel):
+    component_id: str
+
+
 class SftpTransferRequest(BaseModel):
     host: str
     port: int = 22
@@ -883,6 +1404,8 @@ class SftpTransferRequest(BaseModel):
     password: Optional[str] = None
     remote_path: str
     keep_sequences: bool = True
+    auto_split: bool = True
+    max_elements_per_view: int = DEFAULT_SPLIT_MAX_ELEMENTS
     format: str = "gfa"
 
 
@@ -928,13 +1451,25 @@ def health() -> Dict[str, str]:
 async def upload_gfa(
     file: UploadFile = File(...),
     keep_sequences: bool = Form(False),
+    auto_split: bool = Form(True),
+    max_elements_per_view: int = Form(DEFAULT_SPLIT_MAX_ELEMENTS),
 ) -> Dict[str, Any]:
+    source_name = file.filename or "uploaded.gfa"
     try:
-        contents = await file.read()
-        graph = parse_gfa_text(contents.decode("utf-8", errors="replace"), keep_sequences=keep_sequences)
+        loaded = await asyncio.to_thread(load_uploaded_gfa, file, source_name, keep_sequences)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return session.load(graph, file.filename or "uploaded.gfa")
+    return session.load(
+        loaded.graph,
+        source_name,
+        sequence_source_path=loaded.cache_path,
+        sequence_source_size=loaded.source_size,
+        light_mode=loaded.light_mode,
+        light_mode_reason=loaded.light_mode_reason,
+        sequence_load_seconds=loaded.sequence_load_seconds,
+        auto_split=auto_split,
+        max_elements_per_view=max_elements_per_view,
+    )
 
 
 @app.get("/api/graph")
@@ -969,12 +1504,29 @@ def load_server_file(payload: ServerFileRequest) -> Dict[str, Any]:
     path = resolve_server_data_path(payload.path, must_exist=True)
     if path.suffix.lower() not in SERVER_FILE_EXTENSIONS:
         raise HTTPException(status_code=400, detail="Server file must be .gfa or .txt")
+    relative_path = path.relative_to(server_data_root()).as_posix()
+    source_name = f"server:{relative_path}"
     try:
-        graph = parse_gfa_text(path.read_text(encoding="utf-8", errors="replace"), keep_sequences=payload.keep_sequences)
+        cache_path = cache_local_file(path, relative_path)
+        loaded = load_cached_gfa(cache_path, source_name, payload.keep_sequences)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    relative_path = path.relative_to(server_data_root()).as_posix()
-    return session.load(graph, f"server:{relative_path}")
+    return session.load(
+        loaded.graph,
+        source_name,
+        sequence_source_path=loaded.cache_path,
+        sequence_source_size=loaded.source_size,
+        light_mode=loaded.light_mode,
+        light_mode_reason=loaded.light_mode_reason,
+        sequence_load_seconds=loaded.sequence_load_seconds,
+        auto_split=payload.auto_split,
+        max_elements_per_view=payload.max_elements_per_view,
+    )
+
+
+@app.post("/api/select_component")
+def select_component(payload: ComponentSelectionRequest) -> Dict[str, Any]:
+    return session.select_split_component(payload.component_id)
 
 
 @app.post("/api/save_server_file")
@@ -997,14 +1549,10 @@ def save_server_file(payload: ServerSaveRequest) -> Dict[str, Any]:
 @app.post("/api/sftp_download")
 def sftp_download(payload: SftpTransferRequest) -> Dict[str, Any]:
     client, sftp = open_sftp_client(payload)
+    source_name = f"sftp:{payload.host.strip()}:{payload.remote_path.strip()}"
     try:
-        with sftp.open(payload.remote_path.strip(), "r") as remote_file:
-            raw = remote_file.read()
-        if isinstance(raw, bytes):
-            text = raw.decode("utf-8", errors="replace")
-        else:
-            text = str(raw)
-        graph = parse_gfa_text(text, keep_sequences=payload.keep_sequences)
+        cache_path = cache_sftp_file(sftp, payload.remote_path.strip(), payload.remote_path.strip())
+        loaded = load_cached_gfa(cache_path, source_name, payload.keep_sequences)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
@@ -1012,7 +1560,17 @@ def sftp_download(payload: SftpTransferRequest) -> Dict[str, Any]:
     finally:
         sftp.close()
         client.close()
-    return session.load(graph, f"sftp:{payload.host.strip()}:{payload.remote_path.strip()}")
+    return session.load(
+        loaded.graph,
+        source_name,
+        sequence_source_path=loaded.cache_path,
+        sequence_source_size=loaded.source_size,
+        light_mode=loaded.light_mode,
+        light_mode_reason=loaded.light_mode_reason,
+        sequence_load_seconds=loaded.sequence_load_seconds,
+        auto_split=payload.auto_split,
+        max_elements_per_view=payload.max_elements_per_view,
+    )
 
 
 @app.post("/api/sftp_upload")
@@ -1122,11 +1680,20 @@ def api_merge_selection(payload: MergeSelectionRequest) -> Dict[str, Any]:
 
 @app.post("/api/rotate_circular_node")
 def api_rotate_circular_node(payload: RotateCircularNodeRequest) -> Dict[str, Any]:
+    def rotate_with_light_mode_fallback(graph: GfaGraph) -> Dict[str, Any]:
+        try:
+            return rotate_circular_node(graph, payload.node_id, payload.offset)
+        except ValueError as exc:
+            if "requires loading" not in str(exc) or not graph.dropped_sequences:
+                raise
+            rebuilt_graph = session.graph_with_sequences()
+            return rotate_circular_node(rebuilt_graph, payload.node_id, payload.offset)
+
     try:
         return session.mutate(
             "rotate_circular_node",
             payload.model_dump(),
-            lambda graph: rotate_circular_node(graph, payload.node_id, payload.offset),
+            rotate_with_light_mode_fallback,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1379,10 +1946,7 @@ async def api_infer_history(
 @app.get("/api/export", response_class=PlainTextResponse)
 def api_export(format: str = "gfa") -> PlainTextResponse:
     extension, body = export_graph_text(format)
-    filename = f"edited.{extension}"
-    if session.source_name:
-        stem = Path(strip_server_prefix(session.source_name)).stem
-        filename = f"{stem}.edited.{extension}"
+    filename = session.default_export_filename(extension)
     return PlainTextResponse(
         body,
         media_type="text/plain",
@@ -1393,10 +1957,7 @@ def api_export(format: str = "gfa") -> PlainTextResponse:
 @app.post("/api/export_selection", response_class=PlainTextResponse)
 def api_export_selection(payload: SelectionExportRequest) -> PlainTextResponse:
     extension, body = export_selected_links_text(payload.format, payload.edge_ids)
-    filename = f"selected-links.{extension}"
-    if session.source_name:
-        stem = Path(strip_server_prefix(session.source_name)).stem
-        filename = f"{stem}.selected-links.{extension}"
+    filename = session.default_export_filename(extension, selection=True)
     return PlainTextResponse(
         body,
         media_type="text/plain",

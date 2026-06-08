@@ -3,6 +3,10 @@
 
 let cy = null;
 let graphState = null;
+let clientNodes = [];
+let clientEdges = [];
+let clientNodeById = new Map();
+let clientEdgeById = new Map();
 let currentLayout = "cose";
 let toastTimer = null;
 let pendingRename = null;
@@ -12,9 +16,16 @@ let pendingMergeLayout = null;
 let repeatResolutionContext = null;
 let serverSavePathAuto = true;
 let serverSaveSourceName = null;
+let lightModeNoticeSignature = null;
+let lightModeBandageUnlocked = false;
 const DEFAULT_TEXT_EXPORT_FORMAT = "gfa";
 const SESSION_STORAGE_KEY = "gfa-editor-session-id";
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+const DEFAULT_SPLIT_MAX_ELEMENTS = 100000;
+const DEFAULT_SPLIT_NODE_THRESHOLD = 200;
+const LIGHT_MODE_BANDAGE_ELEMENT_LIMIT = 1500;
+const BANDAGE_SEED_COSE_NODE_LIMIT = 750;
+const BANDAGE_FAST_MODE_NODE_LIMIT = 300;
 const CLIENT_SESSION_ID = loadClientSessionId();
 
 function createClientSessionId() {
@@ -252,6 +263,35 @@ const BANDAGE_MODE_CONFIGS = {
     iterationsLarge: 220,
   },
 };
+const BANDAGE_FAST_MODE_OVERRIDES = {
+  flexibleGlyphs: false,
+  segmentGlyphs: false,
+  linkNodeStrength: 0,
+  radialExpansionStrength: 0,
+  capsuleStrength: 0,
+  centerStrength: 0.045,
+  centerWidthFactor: 3.2,
+  centerLengthFactor: 0.1,
+  springStrength: 0.58,
+  springTorqueStrength: 0.05,
+  maxRotation: 0.035,
+  maxMove: 24,
+  bendMultiplier: 0.8,
+  bendScale: 0.18,
+  bendMax: 90,
+  iterationsSmall: 72,
+  iterationsLarge: 42,
+  endpointRefineIterations: 0,
+  simulationIterationsSmall: 80,
+  simulationIterationsLarge: 48,
+  simulationSegmentCollisionEvery: 999999,
+  simulationUntanglePasses: 0,
+  simulationRetightenPasses: 0,
+  overlapResolvePasses: 0,
+  redrawCandidatesSmall: 1,
+  redrawCandidatesMedium: 1,
+  redrawCandidatesLarge: 1,
+};
 
 const dom = {};
 
@@ -264,6 +304,7 @@ document.addEventListener("DOMContentLoaded", () => {
   resetDetails();
   renderStats(null);
   renderHistory({});
+  renderSplitControls(null);
   if (window.lucide) {
     window.lucide.createIcons();
   }
@@ -280,6 +321,10 @@ function cacheDom() {
     "gfa-file",
     "gfa-file-label",
     "keep-sequences",
+    "auto-split-large-gfa",
+    "split-summary",
+    "subgraph-selector-wrap",
+    "subgraph-select",
     "export-menu-toggle",
     "export-menu-panel",
     "quick-export-button",
@@ -385,6 +430,7 @@ function cacheDom() {
   ids.forEach((id) => {
     dom[toCamel(id)] = document.getElementById(id);
   });
+  dom.layoutModeGroup = document.querySelector(".layout-mode-group");
   dom.layoutButtons = Array.from(document.querySelectorAll(".layout-button"));
 }
 
@@ -566,6 +612,17 @@ function bindEvents() {
   });
   dom.sftpDownloadButton.addEventListener("click", downloadFromSftp);
   dom.sftpUploadButton.addEventListener("click", uploadToSftp);
+  dom.subgraphSelect?.addEventListener("pointerdown", expandSubgraphOptions);
+  dom.subgraphSelect?.addEventListener("keydown", (event) => {
+    if ([" ", "Enter", "ArrowDown", "ArrowUp"].includes(event.key)) {
+      expandSubgraphOptions();
+    }
+  });
+  dom.subgraphSelect?.addEventListener("blur", collapseSubgraphOptions);
+  dom.subgraphSelect?.addEventListener("change", async () => {
+    await selectSubgraph();
+    window.setTimeout(collapseSubgraphOptions, 0);
+  });
 
   dom.gfaUploadForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -574,6 +631,7 @@ function bindEvents() {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("keep_sequences", dom.keepSequences.checked ? "true" : "false");
+    appendSplitFormSettings(formData);
     await callAndRender("/api/upload", {
       method: "POST",
       body: formData,
@@ -694,10 +752,27 @@ function bindEvents() {
   });
   bindBandageSvgEvents();
 
+  ["pointerdown", "mousedown", "click", "dblclick"].forEach((eventName) => {
+    dom.layoutModeGroup?.addEventListener(eventName, swallowLayoutButtonEvent, true);
+  });
+
   dom.layoutButtons.forEach((button) => {
-    button.addEventListener("click", () => {
-      currentLayout = button.dataset.layout;
-      dom.layoutButtons.forEach((item) => item.classList.toggle("active", item === button));
+    button.addEventListener("click", (event) => {
+      if (button.disabled || button.classList.contains("is-locked")) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        return;
+      }
+      const nextLayout = button.dataset.layout;
+      if (shouldBlockLightModeLayout(nextLayout)) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation?.();
+        return;
+      }
+      currentLayout = nextLayout;
+      syncLayoutButtons();
       refreshVisualProperties();
       if (isTwinMode()) {
         activateTwinRenderer(true);
@@ -800,6 +875,100 @@ function graphAddsNodes(previousPayload, nextPayload) {
   return (nextPayload?.nodes || []).some((node) => {
     const nodeId = node.data?.id;
     return nodeId && !previousIds.has(nodeId);
+  });
+}
+
+function splitRequestSettings() {
+  return {
+    auto_split: dom.autoSplitLargeGfa?.checked !== false,
+    max_elements_per_view: DEFAULT_SPLIT_MAX_ELEMENTS,
+  };
+}
+
+function appendSplitFormSettings(formData) {
+  const settings = splitRequestSettings();
+  formData.append("auto_split", settings.auto_split ? "true" : "false");
+  formData.append("max_elements_per_view", String(settings.max_elements_per_view));
+}
+
+function splitComponentLabel(component, index = 0) {
+  const name = component?.isRemainingGroup ? "remaining" : `subgraph_${index + 1}`;
+  return `${name}, ${number(component?.nodeCount || 0)} nodes, ${number(component?.linkCount || 0)} links`;
+}
+
+function setSubgraphOptionMode(expanded) {
+  dom.subgraphSelectorWrap?.classList.toggle("is-expanded", Boolean(expanded));
+}
+
+function expandSubgraphOptions() {
+  setSubgraphOptionMode(true);
+}
+
+function collapseSubgraphOptions() {
+  setSubgraphOptionMode(false);
+}
+
+function selectedSplitComponent(split) {
+  if (!split?.splitEnabled) return null;
+  return (split.components || []).find((component) => component.id === split.selectedComponentId) || null;
+}
+
+function renderSplitControls(split) {
+  const active = Boolean(split?.splitEnabled && Array.isArray(split.components) && split.components.length);
+  if (dom.subgraphSelectorWrap && dom.subgraphSelect) {
+    dom.subgraphSelectorWrap.hidden = !active;
+    dom.subgraphSelect.replaceChildren();
+    if (active) {
+      split.components.forEach((component, index) => {
+        const label = splitComponentLabel(component, index);
+        const option = optionEl(component.id, label);
+        option.title = label;
+        dom.subgraphSelect.appendChild(option);
+      });
+      dom.subgraphSelect.value = split.selectedComponentId || split.components[0].id;
+      collapseSubgraphOptions();
+    }
+  }
+  renderSplitSummary(split);
+}
+
+function renderSplitSummary(split) {
+  if (!dom.splitSummary) return;
+  const active = Boolean(split?.splitEnabled && Array.isArray(split.components) && split.components.length);
+  dom.splitSummary.hidden = !active;
+  dom.splitSummary.replaceChildren();
+  if (!active) return;
+  const summary = document.createElement("div");
+  const threshold = split.nodeSplitThreshold || DEFAULT_SPLIT_NODE_THRESHOLD;
+  summary.innerHTML = `<strong>Large graph split:</strong> ${number(split.originalNodeCount)} nodes / ${number(split.originalLinkCount)} links into ${number(split.components.length)} subgraphs. Auto threshold: ${number(threshold)} nodes.`;
+  dom.splitSummary.appendChild(summary);
+  const selected = selectedSplitComponent(split);
+  if (selected) {
+    const selectedLine = document.createElement("div");
+    const selectedIndex = (split.components || []).findIndex((component) => component.id === selected.id);
+    selectedLine.textContent = `Current: ${splitComponentLabel(selected, Math.max(selectedIndex, 0))}`;
+    dom.splitSummary.appendChild(selectedLine);
+  }
+  if (split.warning) {
+    const warning = document.createElement("div");
+    warning.className = "warning";
+    warning.textContent = split.warning;
+    dom.splitSummary.appendChild(warning);
+  }
+}
+
+async function selectSubgraph() {
+  if (!graphState || !dom.subgraphSelect?.value) return;
+  const split = graphState.session?.split;
+  if (dom.subgraphSelect.value === split?.selectedComponentId) return;
+  resetBandageStateForGraphSwitch();
+  await callAndRender("/api/select_component", {
+    method: "POST",
+    body: JSON.stringify({ component_id: dom.subgraphSelect.value }),
+    headers: { "Content-Type": "application/json" },
+    loading: "Loading subgraph...",
+    success: "Subgraph loaded",
+    relayout: true,
   });
 }
 
@@ -2069,6 +2238,7 @@ async function loadSelectedServerFile() {
     body: JSON.stringify({
       path,
       keep_sequences: dom.keepSequences.checked,
+      ...splitRequestSettings(),
     }),
     headers: { "Content-Type": "application/json" },
     loading: "Loading server GFA...",
@@ -2116,6 +2286,7 @@ function sftpPayload(extra = {}) {
     remote_path: dom.sftpRemotePath.value.trim(),
     keep_sequences: dom.keepSequences.checked,
     format: DEFAULT_TEXT_EXPORT_FORMAT,
+    ...splitRequestSettings(),
     ...extra,
   };
 }
@@ -2388,15 +2559,21 @@ function showAlignmentVisualMode() {
 function updateServerSavePath() {
   if (!graphState || !dom.serverSavePath) return;
   if (!isBackendExportFormat(DEFAULT_TEXT_EXPORT_FORMAT)) return;
-  const sourceName = graphState.session?.source_name || "edited";
-  if (!serverSavePathAuto && sourceName === serverSaveSourceName) return;
-  serverSaveSourceName = sourceName;
+  const split = graphState.session?.split;
+  const component = selectedSplitComponent(split);
+  const sourceName = split?.originalFileName || graphState.session?.source_name || "edited";
+  const sourceKey = `${sourceName}|${component?.id || ""}`;
+  if (!serverSavePathAuto && sourceKey === serverSaveSourceName) return;
+  serverSaveSourceName = sourceKey;
   const extension = DEFAULT_TEXT_EXPORT_FORMAT === "gfa" ? "gfa" : "fasta";
   const source = sourceName.replace(/^server:/, "");
   const parts = source.split("/");
   const filename = parts.pop() || "edited";
   const stem = filename.replace(/\.[^.]+$/, "") || "edited";
-  dom.serverSavePath.value = `${stem}.edited.${extension}`;
+  const outputName = component
+    ? `${stem}.${component.exportSuffix}.edited.${extension}`
+    : `${stem}.edited.${extension}`;
+  dom.serverSavePath.value = component ? `${stem}.components/${outputName}` : outputName;
   serverSavePathAuto = true;
 }
 
@@ -2699,14 +2876,199 @@ async function callAndRender(path, options) {
       ? options.relayout(payload, previousPayload)
       : options.relayout ?? true;
     renderGraph(payload, { relayout });
-    showToast(options.success || "Done");
-    setStatus(options.success || "Ready");
+    const lightModeMessage = lightModeStatusMessage(payload.session);
+    if (lightModeMessage) {
+      showToast(lightModeMessage);
+      setStatus(lightModeMessage);
+    } else {
+      showToast(options.success || "Done");
+      setStatus(options.success || "Ready");
+    }
     return payload;
   } catch (error) {
     setStatus(error.message);
     showToast(error.message);
     return null;
   }
+}
+
+function lightModeStatusMessage(sessionInfo) {
+  if (!sessionInfo?.light_mode) return "";
+  const signature = [
+    sessionInfo.source_name || "",
+    sessionInfo.sequence_load_seconds ?? "",
+    sessionInfo.light_mode_reason || "",
+  ].join("|");
+  if (lightModeNoticeSignature === signature) return "";
+  lightModeNoticeSignature = signature;
+  return sessionInfo.light_mode_reason || "Light mode enabled; sequences will be rebuilt from the original GFA when needed";
+}
+
+function canonicalEdgeKey(edge) {
+  if (!edge?.source || !edge?.target) return edge?.id || "";
+  const sourceSide = getGfaEndpointSide(edge.sourceOrient, "source");
+  const targetSide = getGfaEndpointSide(edge.targetOrient, "target");
+  return [
+    `${edge.source}:${sourceSide}`,
+    `${edge.target}:${targetSide}`,
+  ].sort().join("|");
+}
+
+function normalizeGraphPayloadLinks(payload) {
+  const edges = payload?.edges || [];
+  const seen = new Set();
+  const uniqueEdges = [];
+  edges.forEach((edge) => {
+    const key = canonicalEdgeKey(edge.data);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    uniqueEdges.push(edge);
+  });
+  if (uniqueEdges.length === edges.length) return payload;
+  return {
+    ...payload,
+    edges: uniqueEdges,
+    stats: payload.stats ? { ...payload.stats, edge_count: uniqueEdges.length } : payload.stats,
+  };
+}
+
+function rebuildClientCaches(payload) {
+  clientNodes = (payload?.nodes || []).map((node) => node.data);
+  clientEdges = (payload?.edges || []).map((edge) => edge.data);
+  clientNodeById = new Map(clientNodes.map((node) => [node.id, node]));
+  clientEdgeById = new Map(clientEdges.map((edge) => [edge.id, edge]));
+}
+
+function graphElementCount() {
+  return clientNodes.length + clientEdges.length;
+}
+
+function resetBandageStateForGraphSwitch() {
+  bandageState.selected = null;
+  bandageState.selectedNodeIds.clear();
+  bandageState.selectedEdgeIds.clear();
+  bandageState.nodes.clear();
+  bandageState.visibleNodeIds.clear();
+  bandageState.visibleEdgeIds.clear();
+  bandageState.transform = { x: 0, y: 0, scale: 1 };
+  bandageState.pointer = { down: false, mode: "pan", id: null, lastX: 0, lastY: 0 };
+  bandageState.marquee = null;
+  bandageState.lengthScale = null;
+  bandageState.layoutSeed += 1;
+  if (cy) {
+    cy.elements().unselect();
+  }
+}
+
+function isLightModeGraph() {
+  return Boolean(graphState?.session?.light_mode);
+}
+
+function isLightModeBandageLocked() {
+  return isLightModeGraph() && !lightModeBandageUnlocked;
+}
+
+function canUnlockLightModeBandage() {
+  return isLightModeGraph() && graphElementCount() <= LIGHT_MODE_BANDAGE_ELEMENT_LIMIT;
+}
+
+function lightModeBandageLockMessage() {
+  return `Light mode: Band/Twin disabled at ${number(graphElementCount())} elements; delete to <= ${number(LIGHT_MODE_BANDAGE_ELEMENT_LIMIT)} to enable`;
+}
+
+function isBandageFamilyLayout(layout) {
+  return layout === "bandage_native" || layout === "twin";
+}
+
+function shouldBlockLightModeLayout(layout) {
+  return isLightModeBandageLocked() && isBandageFamilyLayout(layout);
+}
+
+function layoutButtonAtPoint(event) {
+  if (!dom.layoutButtons?.length || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return null;
+  return dom.layoutButtons.find((button) => {
+    const rect = button.getBoundingClientRect();
+    return (
+      event.clientX >= rect.left &&
+      event.clientX <= rect.right &&
+      event.clientY >= rect.top &&
+      event.clientY <= rect.bottom
+    );
+  }) || null;
+}
+
+function layoutButtonFromEvent(event) {
+  const targetButton = event.target?.closest?.(".layout-button");
+  return targetButton || layoutButtonAtPoint(event);
+}
+
+function shouldSwallowLayoutButtonEvent(event) {
+  const button = layoutButtonFromEvent(event);
+  if (!button || !isBandageFamilyLayout(button.dataset.layout)) return false;
+  return button.disabled || button.classList.contains("is-locked") || shouldBlockLightModeLayout(button.dataset.layout);
+}
+
+function swallowLayoutButtonEvent(event) {
+  if (!shouldSwallowLayoutButtonEvent(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation?.();
+}
+
+function forceCoseForLockedBandage() {
+  currentLayout = "cose";
+  syncLayoutButtons();
+  if (cy) activateCytoscapeRenderer();
+}
+
+function syncLayoutButtons() {
+  const locked = isLightModeBandageLocked();
+  dom.layoutModeGroup?.classList.toggle("has-locked-layouts", locked);
+  if (dom.layoutModeGroup) {
+    dom.layoutModeGroup.title = locked ? lightModeBandageLockMessage() : "Visualization mode";
+  }
+  dom.layoutButtons.forEach((button) => {
+    const isBandageFamily = isBandageFamilyLayout(button.dataset.layout);
+    button.classList.toggle("active", button.dataset.layout === currentLayout);
+    if (!isBandageFamily) {
+      button.disabled = false;
+      button.classList.remove("is-locked");
+      button.removeAttribute("aria-disabled");
+      return;
+    }
+    button.disabled = locked;
+    button.classList.toggle("is-locked", locked);
+    button.setAttribute("aria-disabled", locked ? "true" : "false");
+    button.title = locked ? lightModeBandageLockMessage() : button.getAttribute("aria-label") || button.title;
+  });
+}
+
+function ensureLightModeSafeLayout() {
+  if (!isLightModeBandageLocked() || (!isBandageMode() && !isTwinMode())) return;
+  currentLayout = "cose";
+  syncLayoutButtons();
+  if (cy) activateCytoscapeRenderer();
+}
+
+function unlockLightModeBandageAfterRedraw() {
+  if (!isLightModeGraph() || lightModeBandageUnlocked) return false;
+  if (!canUnlockLightModeBandage()) {
+    showToast(lightModeBandageLockMessage());
+    setStatus(lightModeBandageLockMessage());
+    return true;
+  }
+  lightModeBandageUnlocked = true;
+  syncLayoutButtons();
+  const message = "Band/Twin enabled for this light-mode graph";
+  showToast(message);
+  setStatus(message);
+  return true;
+}
+
+function guardBandageModeActivation(context) {
+  if (!isLightModeBandageLocked()) return true;
+  forceCoseForLockedBandage();
+  return false;
 }
 
 function latestHistoryDetails(payload, action) {
@@ -2725,9 +3087,30 @@ async function readError(response) {
 }
 
 function renderGraph(payload, options = {}) {
+  payload = normalizeGraphPayloadLinks(payload);
+  const previousComponentId = graphState?.session?.split?.selectedComponentId || null;
+  const nextComponentId = payload?.session?.split?.selectedComponentId || null;
+  if (previousComponentId && nextComponentId && previousComponentId !== nextComponentId) {
+    resetBandageStateForGraphSwitch();
+  }
   graphState = payload;
+  rebuildClientCaches(payload);
+  lightModeBandageUnlocked = !payload.session?.light_mode || graphElementCount() <= LIGHT_MODE_BANDAGE_ELEMENT_LIMIT;
+  ensureLightModeSafeLayout();
+  syncLayoutButtons();
   dom.emptyState.style.display = "none";
-  dom.sourceName.textContent = payload.session?.source_name || "loaded.gfa";
+  const sourceName = payload.session?.source_name || "loaded.gfa";
+  const split = payload.session?.split;
+  const component = selectedSplitComponent(split);
+  const sourceParts = [sourceName];
+  if (component) {
+    sourceParts.push(component.label);
+  }
+  if (payload.session?.light_mode) {
+    sourceParts.push("light mode");
+  }
+  dom.sourceName.textContent = sourceParts.join(" - ");
+  renderSplitControls(split);
   renderStats(payload.stats);
   renderHistogram(payload.histogram || []);
   renderHistory(payload.session || {});
@@ -2995,6 +3378,7 @@ function buildNodeLabel(data) {
 function refreshVisualProperties() {
   if (!cy || !graphState) return;
   if (usesBandageRenderer()) {
+    if (!guardBandageModeActivation("Band/Twin refresh")) return;
     updateBandageVisibilityFromFilters();
     renderBandageSvg();
   }
@@ -3011,12 +3395,14 @@ function refreshVisualProperties() {
 
 function runLayout(animate) {
   if (isTwinMode()) {
+    if (!guardBandageModeActivation("Twin layout")) return;
     layoutBandageGraph({ reset: true });
     renderBandageSvg();
     runCytoscapeLayout(animate);
     return;
   }
   if (isBandageMode()) {
+    if (!guardBandageModeActivation("Band layout")) return;
     layoutBandageGraph({ reset: true });
     renderBandageSvg();
     return;
@@ -3059,6 +3445,7 @@ function applyFilters() {
     applyCytoscapeFilters();
   }
   if (usesBandageRenderer()) {
+    if (!guardBandageModeActivation("Band/Twin filters")) return;
     updateBandageVisibilityFromFilters();
     renderBandageSvg();
   }
@@ -3168,10 +3555,12 @@ function findTwinNodes() {
 
 function drawGraphManually() {
   if (isBandageMode()) {
+    if (!guardBandageModeActivation("Band draw")) return;
     drawBandageGraphManually();
     return;
   }
   if (isTwinMode()) {
+    if (!guardBandageModeActivation("Twin draw")) return;
     drawTwinGraphManually();
     return;
   }
@@ -3195,7 +3584,9 @@ function drawGraphManually() {
   setTimeout(() => {
     if (cy) cy.fit(cy.elements(":visible"), 50);
   }, 120);
-  setStatus("Draw graph complete");
+  if (!unlockLightModeBandageAfterRedraw()) {
+    setStatus("Draw graph complete");
+  }
 }
 
 function drawTwinGraphManually() {
@@ -3558,8 +3949,18 @@ function usesCytoscapeRenderer() {
   return !isBandageMode() || isTwinMode();
 }
 
-function getBandageModeConfig() {
-  return BANDAGE_MODE_CONFIGS[isTwinMode() ? "bandage_native" : currentLayout] || BANDAGE_MODE_CONFIGS.bandage_native;
+function getBandageVisibleNodeCount() {
+  return bandageState.visibleNodeIds?.size || clientNodes.length || 0;
+}
+
+function shouldUseFastBandageConfig(nodeCount = getBandageVisibleNodeCount()) {
+  return isLightModeGraph() && nodeCount > BANDAGE_FAST_MODE_NODE_LIMIT;
+}
+
+function getBandageModeConfig(nodeCount = null) {
+  const base = BANDAGE_MODE_CONFIGS[isTwinMode() ? "bandage_native" : currentLayout] || BANDAGE_MODE_CONFIGS.bandage_native;
+  const count = nodeCount == null ? getBandageVisibleNodeCount() : nodeCount;
+  return shouldUseFastBandageConfig(count) ? { ...base, ...BANDAGE_FAST_MODE_OVERRIDES } : base;
 }
 
 function bindBandageSvgEvents() {
@@ -3707,6 +4108,7 @@ function activateCytoscapeRenderer() {
 }
 
 function activateBandageRenderer(relayout = false) {
+  if (!guardBandageModeActivation("Band view")) return;
   dom.graph.classList.remove("twin-active");
   dom.graph.classList.add("bandage-active");
   resizeBandageSvg();
@@ -3724,6 +4126,7 @@ function activateBandageRenderer(relayout = false) {
 }
 
 function activateTwinRenderer(relayout = false) {
+  if (!guardBandageModeActivation("Twin view")) return;
   dom.graph.classList.remove("bandage-active", "bandage-dragging");
   dom.graph.classList.add("twin-active");
   if (cy) {
@@ -3748,19 +4151,27 @@ function activateTwinRenderer(relayout = false) {
 }
 
 function getClientNodes() {
-  return graphState?.nodes?.map((node) => node.data) || [];
+  return clientNodes;
 }
 
 function getClientEdges() {
-  return graphState?.edges?.map((edge) => edge.data) || [];
+  return clientEdges;
 }
 
 function getNodeData(id) {
-  return getClientNodes().find((node) => node.id === id) || null;
+  return clientNodeById.get(id) || null;
 }
 
 function getEdgeData(id) {
-  return getClientEdges().find((edge) => edge.id === id) || null;
+  return clientEdgeById.get(id) || null;
+}
+
+function getVisibleBandageNodes() {
+  return [...bandageState.visibleNodeIds].map((id) => getNodeData(id)).filter(Boolean);
+}
+
+function getVisibleBandageEdges() {
+  return [...bandageState.visibleEdgeIds].map((id) => getEdgeData(id)).filter(Boolean);
 }
 
 function updateBandageVisibilityFromFilters() {
@@ -3791,8 +4202,9 @@ function isBandageSelectionVisible(selection) {
   return bandageState.visibleEdgeIds.has(selection.id);
 }
 
-function syncBandageNodeStore() {
-  const existing = new Set(getClientNodes().map((node) => node.id));
+function syncBandageNodeStore(nodes = null) {
+  const scopedNodes = nodes || getVisibleBandageNodes();
+  const existing = new Set(scopedNodes.map((node) => node.id));
   if (pendingRename && existing.has(pendingRename.newId) && bandageState.nodes.has(pendingRename.oldId)) {
     const oldState = bandageState.nodes.get(pendingRename.oldId);
     bandageState.nodes.set(pendingRename.newId, cloneBandageState(oldState));
@@ -3802,8 +4214,8 @@ function syncBandageNodeStore() {
       bandageState.nodes.delete(id);
     }
   });
-  const seedMap = getBandageSeedMap(getClientNodes());
-  getClientNodes().forEach((node, index) => {
+  const seedMap = getBandageSeedMap(scopedNodes);
+  scopedNodes.forEach((node, index) => {
     const existingState = bandageState.nodes.get(node.id);
     if (existingState) {
       ensureEndpointState(node, existingState);
@@ -3846,16 +4258,19 @@ function runBandageSeedLayout() {
 }
 
 function layoutBandageGraph({ reset = false } = {}) {
+  const layoutStartedAt = performance.now();
+  bandageState.lengthScale = null;
+  const visibleNodes = getVisibleBandageNodes();
+  const visibleEdges = getVisibleBandageEdges();
   if (reset) {
     bandageState.layoutSeed += 1;
-    runBandageSeedLayout();
+    if (visibleNodes.length <= BANDAGE_SEED_COSE_NODE_LIMIT) {
+      runBandageSeedLayout();
+    }
   }
-  bandageState.lengthScale = null;
-  syncBandageNodeStore();
-  const visibleNodes = getClientNodes().filter((node) => bandageState.visibleNodeIds.has(node.id));
-  const visibleEdges = getClientEdges().filter((edge) => bandageState.visibleEdgeIds.has(edge.id));
+  syncBandageNodeStore(visibleNodes);
   if (!visibleNodes.length) return;
-  const config = getBandageModeConfig();
+  const config = getBandageModeConfig(visibleNodes.length);
   bandageState.lengthScale = getBandageLengthScale(visibleNodes);
 
   if (reset) {
@@ -3873,12 +4288,27 @@ function layoutBandageGraph({ reset = false } = {}) {
   });
 
   const adjacency = buildBandageAdjacency(visibleNodes, visibleEdges);
+  window.__bandageLastLayout = {
+    nodes: visibleNodes.length,
+    edges: visibleEdges.length,
+    fastMode: shouldUseFastBandageConfig(visibleNodes.length),
+    elapsedMs: 0,
+  };
+  if (window.__bandageLastLayout.fastMode) {
+    relaxBandageAngles(visibleNodes, adjacency, 0.34);
+    visibleNodes.forEach((node) => {
+      syncBandageGlyphEndpoints(node, bandageState.nodes.get(node.id));
+    });
+    window.__bandageLastLayout.elapsedMs = Math.round(performance.now() - layoutStartedAt);
+    return;
+  }
   if (config.flexibleGlyphs) {
     if (reset) {
       layoutFlexibleBandageCandidates(visibleNodes, visibleEdges, adjacency, config);
     } else {
       layoutFlexibleBandageGraph(visibleNodes, visibleEdges, adjacency, config);
     }
+    window.__bandageLastLayout.elapsedMs = Math.round(performance.now() - layoutStartedAt);
     return;
   }
 
@@ -3951,6 +4381,7 @@ function layoutBandageGraph({ reset = false } = {}) {
   visibleNodes.forEach((node) => {
     syncBandageGlyphEndpoints(node, bandageState.nodes.get(node.id));
   });
+  window.__bandageLastLayout.elapsedMs = Math.round(performance.now() - layoutStartedAt);
 }
 
 function layoutFlexibleBandageGraph(visibleNodes, visibleEdges, adjacency, config) {
@@ -5036,8 +5467,7 @@ function renderBandageSvg() {
   const linksLayer = svgEl("g", { class: "bandage-links" });
   const contigsLayer = svgEl("g", { class: "bandage-contigs" });
 
-  getClientEdges().forEach((edge) => {
-    if (!bandageState.visibleEdgeIds.has(edge.id)) return;
+  getVisibleBandageEdges().forEach((edge) => {
     const geometry = getLinkGeometry(edge);
     if (!geometry) return;
     const color = chooseEdgeColor(edge);
@@ -5082,8 +5512,7 @@ function renderBandageSvg() {
     linksLayer.appendChild(linkGroup);
   });
 
-  getClientNodes().forEach((node) => {
-    if (!bandageState.visibleNodeIds.has(node.id)) return;
+  getVisibleBandageNodes().forEach((node) => {
     const geometry = getGlyphGeometry(node.id);
     if (!geometry) return;
     const selected = isBandageItemSelected("node", node.id);
@@ -5217,13 +5646,13 @@ function getBandageGlyphLength(node) {
 }
 
 function getBandageLengthScale(nodes = null) {
-  const candidates = nodes || getClientNodes().filter((node) => bandageState.visibleNodeIds.has(node.id));
+  const candidates = nodes || getVisibleBandageNodes();
   const lengths = candidates
     .map((node) => Number(node.length || 0))
     .filter((length) => Number.isFinite(length) && length > 0);
   const maxLength = Math.max(...lengths, 1);
   const count = Math.max(candidates.length, 1);
-  const config = getBandageModeConfig();
+  const config = getBandageModeConfig(candidates.length);
   const maxGlyph = count > 180 ? config.maxGlyphLarge : count > 70 ? config.maxGlyphMedium : config.maxGlyphSmall;
   const minGlyph = count > 180 ? config.minGlyphLarge : config.minGlyphSmall;
   return {
@@ -5235,7 +5664,7 @@ function getBandageLengthScale(nodes = null) {
 }
 
 function getBandageLinkTargetDistance(nodeCount) {
-  const config = getBandageModeConfig();
+  const config = getBandageModeConfig(nodeCount);
   if (nodeCount > 180) return config.linkDistanceLarge;
   if (nodeCount > 70) return config.linkDistanceMedium;
   return config.linkDistanceSmall;
@@ -5296,6 +5725,7 @@ function syncBandageGlyphEndpoints(node, state) {
     syncFlexibleGlyphState(node, state, config);
     return;
   }
+  state.points = null;
   if (!Number.isFinite(state.x) || !Number.isFinite(state.y)) {
     updateBandageCenter(state);
   }
@@ -5640,6 +6070,7 @@ function addRadialExpansion(displacements, visibleNodes, config) {
 }
 
 function addCapsuleRepulsion(displacements, aNode, bNode, strength, padding) {
+  if (!strength || strength <= 0) return;
   const a = getGlyphGeometry(aNode.id);
   const b = getGlyphGeometry(bNode.id);
   if (!a || !b) return;
@@ -5652,6 +6083,7 @@ function addCapsuleRepulsion(displacements, aNode, bNode, strength, padding) {
 }
 
 function addLinkNodeRepulsion(displacements, linkGeometry, node, strength, padding) {
+  if (!strength || strength <= 0) return;
   const glyph = getGlyphGeometry(node.id);
   if (!glyph) return;
   const minDistance = glyph.width / 2 + padding;
@@ -5935,16 +6367,14 @@ function bandageItemsInMarquee(marquee) {
   const screenRect = bandageMarqueeScreenRect(marquee);
   if (screenRect.width < 4 || screenRect.height < 4) return emptySelection;
   const worldRect = bandageMarqueeWorldRect(marquee);
-  const nodeIds = getClientNodes()
-    .filter((node) => bandageState.visibleNodeIds.has(node.id))
+  const nodeIds = getVisibleBandageNodes()
     .filter((node) => {
       const geometry = getGlyphGeometry(node.id);
       if (!geometry) return false;
       return glyphIntersectsRect(geometry, worldRect);
     })
     .map((node) => node.id);
-  const edgeIds = getClientEdges()
-    .filter((edge) => bandageState.visibleEdgeIds.has(edge.id))
+  const edgeIds = getVisibleBandageEdges()
     .filter((edge) => {
       const geometry = getLinkGeometry(edge);
       if (!geometry) return false;
@@ -6277,8 +6707,7 @@ function screenPointToWorld(x, y) {
 function fitBandageToView() {
   if (!graphState || !bandageState.visibleNodeIds.size) return;
   const boxes = [];
-  getClientNodes().forEach((node) => {
-    if (!bandageState.visibleNodeIds.has(node.id)) return;
+  getVisibleBandageNodes().forEach((node) => {
     const geometry = getGlyphGeometry(node.id);
     if (!geometry) return;
     if (geometry.points?.length > 2) {

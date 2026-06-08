@@ -308,6 +308,39 @@ h2 {
   font-size: 12px;
 }
 
+.compact-field {
+  gap: 5px;
+}
+
+.compact-field input,
+.compact-field select {
+  min-height: 32px;
+}
+
+.split-summary {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--panel-soft);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.split-summary[hidden] {
+  display: none;
+}
+
+.split-summary strong {
+  color: var(--ink);
+}
+
+.split-summary .warning {
+  color: var(--warning);
+}
+
 .check-row.is-disabled {
   opacity: 0.55;
 }
@@ -505,6 +538,48 @@ button svg,
   min-width: 0;
 }
 
+.subgraph-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: min(390px, 58vw);
+  min-height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.subgraph-selector[hidden] {
+  display: none;
+}
+
+.subgraph-selector span {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.subgraph-selector select {
+  width: min(280px, 42vw);
+  min-width: 0;
+  max-width: 280px;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  outline: none;
+}
+
+.subgraph-selector.is-expanded {
+  max-width: min(390px, 58vw);
+}
+
+.subgraph-selector.is-expanded select {
+  width: min(280px, 42vw);
+  max-width: 280px;
+}
+
 .graph-toolbar button {
   position: relative;
   transition:
@@ -685,6 +760,10 @@ button svg,
   flex-wrap: nowrap;
 }
 
+.layout-mode-group.has-locked-layouts {
+  cursor: not-allowed;
+}
+
 .layout-mode-group .layout-button {
   display: inline-flex;
   align-items: center;
@@ -694,6 +773,12 @@ button svg,
   min-height: 34px;
   padding: 0;
   border: 1px solid transparent;
+}
+
+.layout-mode-group .layout-button:disabled,
+.layout-mode-group .layout-button.is-locked {
+  cursor: not-allowed;
+  opacity: 0.38;
 }
 
 .layout-mode-icon {

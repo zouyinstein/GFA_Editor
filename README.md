@@ -118,6 +118,12 @@ Replace `8000` with the actual port. If you do not want to stop that process, st
 7. The left Alignments panel can run or import alignment results. Use `f`, `b`, and the color picker to control each query.
 8. The export controls on the top right support GFA, FASTA, current-view SVG/PDF, selected subgraph export, and edit history JSON.
 
+Large GFA files are checked as soon as they are loaded. Files with more than 200 nodes are split automatically into connected subgraph views, so there is no required manual "max elements per view" setting. Single-edge components are grouped into a combined `Remaining` view instead of being listed one by one.
+
+When a graph is split, use the Subgraph selector in the top toolbar to switch between views. Each option stays in the compact format `subgraph_1, 81 nodes, 103 links`; the grouped leftover view is shown as `remaining, ... nodes, ... links`.
+
+GFA links are normalized on import, render, edit, and export. Reciprocal endpoint records such as the paired hifiasm `+/+` and `-/-` links are shown as one logical link in Cose, Band, and Twin views, matching the single-link behavior expected for Flye-style files.
+
 For detailed usage, see [docs/user_manual.md](docs/user_manual.md).
 
 ## Desktop App

@@ -7,9 +7,10 @@ import copy
 import hashlib
 import math
 import re
+import time
 from dataclasses import dataclass, field
 from statistics import median
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 DEPTH_TAGS = ("dp", "DP", "rd", "RD", "cov", "COV", "KC", "RC")
@@ -129,6 +130,12 @@ def _make_edge_id(index: int, source: str, source_orient: str, target: str, targ
     return f"link_{index}_{digest}"
 
 
+def _canonical_link_key(source: str, source_orient: str, target: str, target_orient: str) -> Tuple[Tuple[str, str], Tuple[str, str]]:
+    source_endpoint = (source, _gfa_endpoint_side(source_orient, "source"))
+    target_endpoint = (target, _gfa_endpoint_side(target_orient, "target"))
+    return tuple(sorted((source_endpoint, target_endpoint)))
+
+
 def renumber_links(graph: "GfaGraph") -> None:
     for index, link in enumerate(graph.links):
         link.id = _make_edge_id(index, link.source, link.source_orient, link.target, link.target_orient)
@@ -175,6 +182,26 @@ class Link:
         return duplicate
 
 
+def unique_links(links: Iterable[Link]) -> List[Link]:
+    seen_link_keys: set[Tuple[Tuple[str, str], Tuple[str, str]]] = set()
+    unique: List[Link] = []
+    for link in links:
+        link_key = _canonical_link_key(link.source, link.source_orient, link.target, link.target_orient)
+        if link_key in seen_link_keys:
+            continue
+        seen_link_keys.add(link_key)
+        unique.append(link)
+    return unique
+
+
+def deduplicate_links(graph: "GfaGraph") -> int:
+    unique = unique_links(graph.links)
+    removed = len(graph.links) - len(unique)
+    if removed:
+        graph.links = unique
+    return removed
+
+
 @dataclass
 class GfaGraph:
     headers: List[List[str]] = field(default_factory=list)
@@ -187,6 +214,7 @@ class GfaGraph:
         return copy.deepcopy(self)
 
     def stats(self) -> Dict[str, Any]:
+        links = unique_links(self.links)
         lengths = [segment.length for segment in self.segments.values()]
         depths = [
             segment.depth
@@ -195,12 +223,12 @@ class GfaGraph:
         ]
         supports = [
             link.support
-            for link in self.links
+            for link in links
             if link.support is not None and math.isfinite(link.support)
         ]
         return {
             "node_count": len(self.segments),
-            "edge_count": len(self.links),
+            "edge_count": len(links),
             "total_bp": sum(lengths),
             "min_depth": min(depths) if depths else None,
             "max_depth": max(depths) if depths else None,
@@ -216,6 +244,7 @@ class GfaGraph:
         max_depth = stats["max_depth"] or 1
         max_length = max((segment.length for segment in self.segments.values()), default=1)
         max_support = stats["max_support"] or 1
+        links = unique_links(self.links)
 
         nodes = []
         for segment in self.segments.values():
@@ -246,7 +275,7 @@ class GfaGraph:
 
         degree_by_id = {segment_id: 0 for segment_id in self.segments}
         edges = []
-        for link in self.links:
+        for link in links:
             if link.source not in self.segments or link.target not in self.segments:
                 continue
             degree_by_id[link.source] = degree_by_id.get(link.source, 0) + 1
@@ -385,13 +414,28 @@ def format_edge_label(link: Link) -> str:
     return f"RC {support}"
 
 
-def parse_gfa_text(text: str, keep_sequences: bool = False) -> GfaGraph:
+def parse_gfa_lines(
+    lines: Iterable[Any],
+    keep_sequences: bool = False,
+    sequence_time_limit_seconds: Optional[float] = None,
+) -> GfaGraph:
     graph = GfaGraph(dropped_sequences=not keep_sequences)
     edge_index = 0
-    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+    seen_link_keys: set[Tuple[Tuple[str, str], Tuple[str, str]]] = set()
+    keep_segment_sequences = keep_sequences
+    sequence_deadline = (
+        time.monotonic() + sequence_time_limit_seconds
+        if keep_sequences and sequence_time_limit_seconds is not None
+        else None
+    )
+    for line_number, raw_line in enumerate(lines, start=1):
+        if isinstance(raw_line, bytes):
+            raw_line = raw_line.decode("utf-8", errors="replace")
+        elif not isinstance(raw_line, str):
+            raw_line = str(raw_line)
         if not raw_line.strip():
             continue
-        fields = raw_line.rstrip("\n").split("\t")
+        fields = raw_line.rstrip("\r\n").split("\t")
         record_type = fields[0]
         if record_type == "H":
             graph.headers.append(fields)
@@ -405,9 +449,18 @@ def parse_gfa_text(text: str, keep_sequences: bool = False) -> GfaGraph:
             tagged_length = _length_from_tags(tags)
             sequence_length = 0 if raw_sequence == "*" else len(raw_sequence)
             length = tagged_length if tagged_length is not None else sequence_length
+            if (
+                keep_segment_sequences
+                and sequence_deadline is not None
+                and time.monotonic() > sequence_deadline
+            ):
+                keep_segment_sequences = False
+                graph.dropped_sequences = True
+                for segment in graph.segments.values():
+                    segment.sequence = None
             graph.segments[name] = Segment(
                 id=name,
-                sequence=raw_sequence if keep_sequences and raw_sequence != "*" else None,
+                sequence=raw_sequence if keep_segment_sequences and raw_sequence != "*" else None,
                 length=length,
                 depth=_first_numeric_tag(tags, DEPTH_TAGS),
                 tags=tags,
@@ -427,11 +480,32 @@ def parse_gfa_text(text: str, keep_sequences: bool = False) -> GfaGraph:
                 support=_first_numeric_tag(tags, LINK_SUPPORT_TAGS),
                 tags=tags,
             )
+            link_key = _canonical_link_key(
+                link.source,
+                link.source_orient,
+                link.target,
+                link.target_orient,
+            )
+            if link_key in seen_link_keys:
+                continue
+            seen_link_keys.add(link_key)
             graph.links.append(link)
             edge_index += 1
             continue
         graph.other_records.append(fields)
     return graph
+
+
+def parse_gfa_text(
+    text: str,
+    keep_sequences: bool = False,
+    sequence_time_limit_seconds: Optional[float] = None,
+) -> GfaGraph:
+    return parse_gfa_lines(
+        text.splitlines(),
+        keep_sequences=keep_sequences,
+        sequence_time_limit_seconds=sequence_time_limit_seconds,
+    )
 
 
 def delete_node(graph: GfaGraph, node_id: str) -> Dict[str, Any]:
@@ -606,11 +680,25 @@ def duplicate_node(graph: GfaGraph, node_id: str, requested_id: Optional[str] = 
     incident_links = [
         link for link in graph.links if link.source == node_id or link.target == node_id
     ]
+    seen_link_keys = {
+        _canonical_link_key(link.source, link.source_orient, link.target, link.target_orient)
+        for link in graph.links
+    }
     edge_index = len(graph.links)
     copied_links: List[Link] = []
     for link in incident_links:
-        copied_links.append(link.clone_with_endpoint(node_id, new_id, edge_index))
+        copied_link = link.clone_with_endpoint(node_id, new_id, edge_index)
         edge_index += 1
+        copied_link_key = _canonical_link_key(
+            copied_link.source,
+            copied_link.source_orient,
+            copied_link.target,
+            copied_link.target_orient,
+        )
+        if copied_link_key in seen_link_keys:
+            continue
+        seen_link_keys.add(copied_link_key)
+        copied_links.append(copied_link)
     graph.links.extend(copied_links)
     return {"source_node_id": node_id, "new_node_id": new_id, "copied_edges": len(copied_links)}
 
@@ -662,7 +750,7 @@ def merge_link(
 
     rewired_links: List[Link] = []
     removed_edge_ids = [edge_id]
-    for link in graph.links:
+    for link in unique_links(graph.links):
         if link.id == edge_id:
             continue
         duplicate = copy.deepcopy(link)
@@ -978,7 +1066,7 @@ def _validate_selected_path_external_links(
     path_nodes = set(path_node_ids)
     path_edges = set(path_edge_ids)
     internal_nodes = set(path_node_ids[1:-1])
-    for link in graph.links:
+    for link in unique_links(graph.links):
         if link.source == link.target and link.source in path_nodes:
             raise ValueError("Cannot merge a path with self-loop links on selected contigs")
         if link.id in path_edges or link.id == retained_edge_id:
@@ -1293,7 +1381,7 @@ def export_gfa(graph: GfaGraph) -> str:
         sequence = segment.sequence if segment.sequence is not None else "*"
         lines.append("\t".join(["S", segment.id, sequence, *format_tags(tags)]))
 
-    for link in graph.links:
+    for link in unique_links(graph.links):
         if link.source not in graph.segments or link.target not in graph.segments:
             continue
         lines.append(

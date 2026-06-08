@@ -8,11 +8,11 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GFA Editor v1.2.3</title>
-    <link rel="stylesheet" href="/styles.css?v=20260607-v122" />
+    <link rel="stylesheet" href="/styles.css?v=20260608-v123-r15" />
     <script src="/vendor/cytoscape.min.js"></script>
     <script src="/vendor/d3.min.js"></script>
     <script src="/vendor/lucide.min.js"></script>
-    <script src="/app.js?v=20260607-v122" defer></script>
+    <script src="/app.js?v=20260608-v123-r15" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -50,6 +50,11 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
               <input id="keep-sequences" type="checkbox" checked />
               <span>Keep sequences for GFA/FASTA export</span>
             </label>
+            <label class="check-row compact-check">
+              <input id="auto-split-large-gfa" type="checkbox" checked />
+              <span>Auto-split large GFA</span>
+            </label>
+            <div id="split-summary" class="split-summary" hidden></div>
           </form>
         </section>
 
@@ -157,7 +162,7 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
                   <circle cx="7.5" cy="18" r="2.1" />
                 </svg>
               </button>
-              <button class="layout-button" type="button" data-layout="bandage_native" title="Band view" aria-label="Band view">
+              <button class="layout-button is-locked" type="button" data-layout="bandage_native" title="Band view" aria-label="Band view" aria-disabled="true" disabled>
                 <svg class="layout-mode-icon" viewBox="0 0 28 28" aria-hidden="true" focusable="false">
                   <path class="layout-mode-band" d="M5.5 19.5 C8.5 8.5 15.5 7 22.5 11.5" />
                   <path class="layout-mode-band" d="M7 20.5 C12.5 22.5 18.5 20.5 22.5 15" />
@@ -166,7 +171,7 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
                   <circle cx="22.5" cy="15" r="1.8" />
                 </svg>
               </button>
-              <button class="layout-button" type="button" data-layout="twin" title="Twin view" aria-label="Twin view">
+              <button class="layout-button is-locked" type="button" data-layout="twin" title="Twin view" aria-label="Twin view" aria-disabled="true" disabled>
                 <svg class="layout-mode-icon" viewBox="0 0 28 28" aria-hidden="true" focusable="false">
                   <path class="layout-mode-divider" d="M14 4.5v19" />
                   <path class="layout-mode-link" d="M5.5 11 10 8.5 11.5 15.5 6.5 18.5z" />
@@ -179,6 +184,10 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
                 </svg>
               </button>
             </div>
+            <label id="subgraph-selector-wrap" class="subgraph-selector" hidden>
+              <span>Subgraph</span>
+              <select id="subgraph-select"></select>
+            </label>
             <div class="display-menu">
               <button
                 id="graph-display-toggle"
