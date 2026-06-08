@@ -53,4 +53,23 @@ if command -v lsof >/dev/null 2>&1; then
   done
 fi
 
+if command -v ss >/dev/null 2>&1; then
+  while read -r state recvq sendq local_addr rest; do
+    listen_port="${local_addr##*:}"
+    if [[ "$listen_port" != "$PORT" ]]; then
+      continue
+    fi
+    if [[ "$rest" =~ pid=([0-9]+) ]]; then
+      pid="${BASH_REMATCH[1]}"
+      command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+      if [[ "$command_line" == *"uvicorn backend.main:app"* || "$command_line" == *"backend.main:app"* ]]; then
+        if stop_pid "$pid"; then
+          echo "Stopped GFA Editor PID $pid."
+          exit 0
+        fi
+      fi
+    fi
+  done < <(ss -ltnpH 2>/dev/null || true)
+fi
+
 echo "No running GFA Editor server found for port $PORT."

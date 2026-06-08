@@ -163,28 +163,45 @@ list_registered_gfa_editor_ports() {
 }
 
 health_check_url() {
+  "$PYTHON" - "$1" "${2:-}" <<'PY' >/dev/null 2>&1
+import json
+import sys
+from urllib.request import urlopen
+data = json.loads(urlopen(sys.argv[1] + "/api/health", timeout=1).read().decode("utf-8"))
+if data.get("status") != "ok":
+    raise SystemExit(1)
+expected_instance_id = sys.argv[2]
+if expected_instance_id and data.get("instance_id") != expected_instance_id:
+    raise SystemExit(1)
+PY
+}
+
+page_check_url() {
   "$PYTHON" - "$1" <<'PY' >/dev/null 2>&1
 import sys
 from urllib.request import urlopen
-urlopen(sys.argv[1] + "/api/health", timeout=1).read()
+body = urlopen(sys.argv[1] + "/", timeout=1).read(200000)
+if b"GFA Editor" not in body:
+    raise SystemExit(1)
 PY
 }
 
 port_available() {
-  local port="$1"
+  local port="$1" state recvq sendq local_addr rest listen_port
   if command -v lsof >/dev/null 2>&1; then
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
       return 1
     fi
-    return 0
   fi
   if command -v ss >/dev/null 2>&1; then
-    if [[ -n "$(ss -ltnH "sport = :$port" 2>/dev/null || true)" ]]; then
-      return 1
-    fi
-    return 0
+    while read -r state recvq sendq local_addr rest; do
+      listen_port="${local_addr##*:}"
+      if [[ "$listen_port" == "$port" ]]; then
+        return 1
+      fi
+    done < <(ss -ltnH 2>/dev/null || true)
   fi
-  "$PYTHON" - "$HEALTH_HOST" "$port" <<'PY' >/dev/null 2>&1
+  if "$PYTHON" - "$HEALTH_HOST" "$port" <<'PY' >/dev/null 2>&1
 import socket
 import sys
 
@@ -192,9 +209,12 @@ host = sys.argv[1]
 port = int(sys.argv[2])
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
     sock.settimeout(0.25)
-    if sock.connect_ex((host, port)) == 0:
-        sys.exit(1)
+    raise SystemExit(0 if sock.connect_ex((host, port)) == 0 else 1)
 PY
+  then
+    return 1
+  fi
+  return 0
 }
 
 find_free_port() {
@@ -263,6 +283,12 @@ PY
   exit 1
 }
 
+if [[ ! -f "$ROOT_DIR/frontend/index.html" ]]; then
+  echo "Frontend file missing: $ROOT_DIR/frontend/index.html" >&2
+  echo "Use a complete GFA_Editor-main directory that includes the frontend folder." >&2
+  exit 1
+fi
+
 mkdir -p "$ROOT_DIR/.local"
 DATA_DIR="$(allocate_task_data_dir)"
 
@@ -271,15 +297,16 @@ if [[ -f "$SERVICE_FILE" ]]; then
   existing_pid="$(awk -F= '$1 == "PID" {print $2}' "$SERVICE_FILE" 2>/dev/null || true)"
   existing_port="$(awk -F= '$1 == "PORT" {print $2}' "$SERVICE_FILE" 2>/dev/null || true)"
   existing_url="$(awk -F= '$1 == "URL" {print $2}' "$SERVICE_FILE" 2>/dev/null || true)"
+  existing_instance_id="$(awk -F= '$1 == "INSTANCE_ID" {print $2}' "$SERVICE_FILE" 2>/dev/null || true)"
   if [[ -n "$existing_pid" && -n "$existing_port" ]] && kill -0 "$existing_pid" >/dev/null 2>&1; then
     existing_health_url="$(awk -F= '$1 == "HEALTH_URL" {print $2}' "$SERVICE_FILE" 2>/dev/null || true)"
-    if health_check_url "${existing_health_url:-http://${HEALTH_HOST}:${existing_port}}"; then
+    if health_check_url "${existing_health_url:-http://${HEALTH_HOST}:${existing_port}}" "$existing_instance_id" && page_check_url "${existing_health_url:-http://${HEALTH_HOST}:${existing_port}}"; then
       echo "This data directory already has a running GFA Editor service."
       echo "Task root directory: $TASK_ROOT_DIR"
       echo "Data directory: $DATA_DIR"
       echo "Open: ${existing_url:-http://$(detect_public_host):${existing_port}/}"
       echo "PID: $existing_pid"
-      echo "Stop: GFA_EDITOR_PORT=$existing_port bash scripts/stop_local.sh"
+      echo "Stop: GFA_EDITOR_PORT=$existing_port bash $ROOT_DIR/scripts/stop_local.sh"
       exit 0
     fi
   fi
@@ -308,8 +335,14 @@ URL="http://${PUBLIC_HOST}:${PORT}/"
 HEALTH_URL="http://${HEALTH_HOST}:${PORT}"
 PID_FILE="$ROOT_DIR/.local/gfa-editor-${PORT}.pid"
 LOG_FILE="${GFA_EDITOR_LOG:-$ROOT_DIR/.local/gfa-editor-${PORT}.log}"
+INSTANCE_ID="$("$PYTHON" - <<'PY'
+import uuid
+print(uuid.uuid4().hex)
+PY
+)"
 
 export GFA_EDITOR_DATA_DIR="$DATA_DIR"
+export GFA_EDITOR_INSTANCE_ID="$INSTANCE_ID"
 export PATH="$ROOT_DIR/packaging/bin/$(platform_key):$PATH"
 
 start_server
@@ -321,20 +354,21 @@ echo "$pid" > "$PID_FILE"
   echo "PORT=$PORT"
   echo "URL=$URL"
   echo "HEALTH_URL=$HEALTH_URL"
+  echo "INSTANCE_ID=$INSTANCE_ID"
   echo "TASK_ROOT_DIR=$TASK_ROOT_DIR"
   echo "DATA_DIR=$DATA_DIR"
   echo "LOG=$LOG_FILE"
 } > "$SERVICE_FILE"
 
 for _ in $(seq 1 40); do
-  if health_check_url "$HEALTH_URL"; then
+  if health_check_url "$HEALTH_URL" "$INSTANCE_ID" && page_check_url "$HEALTH_URL"; then
     echo "GFA Editor remote service started."
     echo "Task root directory: $TASK_ROOT_DIR"
     echo "Data directory: $DATA_DIR"
     echo "Open: $URL"
     echo "PID: $pid"
     echo "Log: $LOG_FILE"
-    echo "Stop: GFA_EDITOR_PORT=$PORT bash scripts/stop_local.sh"
+    echo "Stop: GFA_EDITOR_PORT=$PORT bash $ROOT_DIR/scripts/stop_local.sh"
     exit 0
   fi
   sleep 0.25

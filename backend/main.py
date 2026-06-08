@@ -57,6 +57,7 @@ from .edit_history import (
 ROOT_DIR = Path(os.environ.get("GFA_EDITOR_ROOT", Path(__file__).resolve().parents[1])).resolve()
 FRONTEND_DIR = Path(os.environ.get("GFA_EDITOR_FRONTEND_DIR", ROOT_DIR / "frontend")).resolve()
 SERVER_DATA_DIR = Path(os.environ.get("GFA_EDITOR_DATA_DIR", ROOT_DIR / "server_data")).expanduser()
+INSTANCE_ID = os.environ.get("GFA_EDITOR_INSTANCE_ID", "")
 SERVER_FILE_EXTENSIONS = {".gfa", ".txt"}
 SESSION_HEADER = "X-GFA-Session-Id"
 SESSION_COOKIE = "gfa_editor_session"
@@ -920,7 +921,7 @@ async def bind_editor_session(request: Request, call_next):
 
 @app.get("/api/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": "1.2.3", "instance_id": INSTANCE_ID}
 
 
 @app.post("/api/upload")
