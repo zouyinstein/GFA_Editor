@@ -886,9 +886,9 @@ class SftpTransferRequest(BaseModel):
 
 
 app = FastAPI(
-    title="GFA Editor v1.2.2",
+    title="GFA Editor v1.2.3",
     description="A local Bandage-style GFA graph editor.",
-    version="1.2.2",
+    version="1.2.3",
 )
 
 app.add_middleware(

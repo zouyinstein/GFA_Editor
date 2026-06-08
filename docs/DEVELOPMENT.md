@@ -8,8 +8,8 @@ This file keeps developer-facing notes out of the public README.
 - Core GFA parsing/editing/alignment logic: `backend/gfa_core.py`.
 - Frontend: static HTML/CSS/JS in `frontend/`.
 - Local static dependencies are vendored under `frontend/vendor/`.
-- The backend serves the frontend directly. By default a local browser uses `http://127.0.0.1:8000`; on a Linux server, use one `scripts/start_remote.sh <data-dir>` process per user or task.
-- Browser API calls include `X-GFA-Session-Id` for in-memory state inside one process. Linux server multi-user work should use separate `scripts/start_remote.sh <data-dir>` processes instead of shared-process browser sessions.
+- The backend serves the frontend directly. By default a local browser uses `http://127.0.0.1:8000`; on a Linux server, use one `scripts/start_remote.sh [task-root-dir]` process per user or task.
+- Browser API calls include `X-GFA-Session-Id` for in-memory state inside one process. Linux server multi-user work should use separate `scripts/start_remote.sh [task-root-dir]` processes instead of shared-process browser sessions.
 
 ## Implemented Areas
 
@@ -37,10 +37,10 @@ For Linux server access from another computer:
 
 ```bash
 bash scripts/setup_local_dev.sh
-GFA_EDITOR_PUBLIC_HOST=<server-ip> bash scripts/start_remote.sh /path/to/user-data
+GFA_EDITOR_PUBLIC_HOST=<server-ip> bash scripts/start_remote.sh /path/to/task-root
 ```
 
-For multi-user server work, the recommended isolation model is one server process, one port, and one data directory per user or task. `scripts/start_remote.sh` starts at port `8000`, counts GFA Editor ports that are already occupied, and automatically selects the next free port when needed.
+For multi-user server work, the recommended isolation model is one server process, one port, and one auto-created data directory per user or task. `scripts/start_remote.sh` creates the next available `gfa_editor_task_N` folder under the current directory or the optional task root, starts at port `8000`, counts GFA Editor ports that are already occupied, and automatically selects the next free port when needed.
 
 For desktop-wrapper development:
 

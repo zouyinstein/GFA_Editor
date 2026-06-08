@@ -2,17 +2,19 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CALLER_DIR="$(pwd)"
 cd "$ROOT_DIR"
 
 usage() {
   cat <<'USAGE'
 Usage:
-  bash scripts/start_remote.sh <data-dir>
+  bash scripts/start_remote.sh [task-root-dir]
 
 Starts one remote GFA Editor service for one user or task.
 
-Required:
-  <data-dir>  A unique server-side folder for this service's files.
+Optional:
+  [task-root-dir]  Parent folder for auto-created gfa_editor_task_N data folders.
+                   Defaults to the current directory where you run this script.
 
 Optional environment variables:
   GFA_EDITOR_PUBLIC_HOST=192.168.220.49  Public server IP/host shown in the URL.
@@ -27,8 +29,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-if [[ $# -ne 1 ]]; then
-  echo "Error: please provide a unique data directory for this remote service." >&2
+if [[ $# -gt 1 ]]; then
+  echo "Error: provide at most one task root directory." >&2
   usage >&2
   exit 2
 fi
@@ -39,16 +41,16 @@ if [[ "$HOST" == "0.0.0.0" ]]; then
   HEALTH_HOST="127.0.0.1"
 fi
 PREFERRED_PORT="${GFA_EDITOR_PORT:-8000}"
-RAW_DATA_DIR="$1"
+RAW_TASK_ROOT="${1:-$CALLER_DIR}"
 
-if [[ "$RAW_DATA_DIR" == "~" ]]; then
-  DATA_DIR="$HOME"
-elif [[ "$RAW_DATA_DIR" == "~/"* ]]; then
-  DATA_DIR="$HOME/${RAW_DATA_DIR#"~/"}"
-elif [[ "$RAW_DATA_DIR" == /* ]]; then
-  DATA_DIR="$RAW_DATA_DIR"
+if [[ "$RAW_TASK_ROOT" == "~" ]]; then
+  TASK_ROOT_DIR="$HOME"
+elif [[ "$RAW_TASK_ROOT" == "~/"* ]]; then
+  TASK_ROOT_DIR="$HOME/${RAW_TASK_ROOT#"~/"}"
+elif [[ "$RAW_TASK_ROOT" == /* ]]; then
+  TASK_ROOT_DIR="$RAW_TASK_ROOT"
 else
-  DATA_DIR="$PWD/$RAW_DATA_DIR"
+  TASK_ROOT_DIR="$CALLER_DIR/$RAW_TASK_ROOT"
 fi
 
 if ! [[ "$PREFERRED_PORT" =~ ^[0-9]+$ ]] || (( PREFERRED_PORT < 1 || PREFERRED_PORT > 65535 )); then
@@ -215,6 +217,34 @@ start_server() {
   fi
 }
 
+allocate_task_data_dir() {
+  local index candidate existing dirname suffix
+  mkdir -p "$TASK_ROOT_DIR"
+  index=1
+  shopt -s nullglob
+  for existing in "$TASK_ROOT_DIR"/gfa_editor_task_*; do
+    dirname="${existing##*/}"
+    suffix="${dirname#gfa_editor_task_}"
+    if [[ "$suffix" =~ ^[0-9]+$ ]] && (( suffix >= index )); then
+      index=$((suffix + 1))
+    fi
+  done
+  shopt -u nullglob
+  while true; do
+    candidate="$TASK_ROOT_DIR/gfa_editor_task_${index}"
+    if mkdir "$candidate" 2>/dev/null; then
+      echo "$candidate"
+      return 0
+    fi
+    if [[ -e "$candidate" ]]; then
+      index=$((index + 1))
+      continue
+    fi
+    echo "Error: could not create task data directory: $candidate" >&2
+    return 1
+  done
+}
+
 if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
   PYTHON="${GFA_EDITOR_PYTHON:-$ROOT_DIR/.venv/bin/python}"
 else
@@ -233,7 +263,8 @@ PY
   exit 1
 }
 
-mkdir -p "$ROOT_DIR/.local" "$DATA_DIR"
+mkdir -p "$ROOT_DIR/.local"
+DATA_DIR="$(allocate_task_data_dir)"
 
 SERVICE_FILE="$DATA_DIR/.gfa-editor-service"
 if [[ -f "$SERVICE_FILE" ]]; then
@@ -244,6 +275,7 @@ if [[ -f "$SERVICE_FILE" ]]; then
     existing_health_url="$(awk -F= '$1 == "HEALTH_URL" {print $2}' "$SERVICE_FILE" 2>/dev/null || true)"
     if health_check_url "${existing_health_url:-http://${HEALTH_HOST}:${existing_port}}"; then
       echo "This data directory already has a running GFA Editor service."
+      echo "Task root directory: $TASK_ROOT_DIR"
       echo "Data directory: $DATA_DIR"
       echo "Open: ${existing_url:-http://$(detect_public_host):${existing_port}/}"
       echo "PID: $existing_pid"
@@ -289,6 +321,7 @@ echo "$pid" > "$PID_FILE"
   echo "PORT=$PORT"
   echo "URL=$URL"
   echo "HEALTH_URL=$HEALTH_URL"
+  echo "TASK_ROOT_DIR=$TASK_ROOT_DIR"
   echo "DATA_DIR=$DATA_DIR"
   echo "LOG=$LOG_FILE"
 } > "$SERVICE_FILE"
@@ -296,6 +329,7 @@ echo "$pid" > "$PID_FILE"
 for _ in $(seq 1 40); do
   if health_check_url "$HEALTH_URL"; then
     echo "GFA Editor remote service started."
+    echo "Task root directory: $TASK_ROOT_DIR"
     echo "Data directory: $DATA_DIR"
     echo "Open: $URL"
     echo "PID: $pid"

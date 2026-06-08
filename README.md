@@ -2,7 +2,7 @@
   <img src="frontend/app-icon.png" alt="GFA Editor app icon" width="96">
 </p>
 
-# GFA Editor v1.2.2
+# GFA Editor v1.2.3
 
 GFA Editor is a local Bandage-style viewer and editor for GFA assembly graphs. It provides Cose, Band, and Twin visualization modes, graph editing, alignment visualization, local/server file management, and GFA, FASTA, SVG, and PDF export.
 
@@ -52,19 +52,22 @@ Replace `/home/zouyi/GFA_Editor-main` with the actual server path if you install
 bash scripts/setup_local_dev.sh
 ```
 
-3. Start one remote service with a data directory that belongs only to this user or task:
+3. Start one remote service. The script creates a new `gfa_editor_task_N` data directory under the current directory:
 
 ```bash
-bash scripts/start_remote.sh /home/zouyi/gfa-editor-data/user-a
+cd /home/zouyi
+GFA_EDITOR_PUBLIC_HOST=192.168.220.49 bash /home/zouyi/GFA_Editor-main/scripts/start_remote.sh
+```
+
+This creates `/home/zouyi/gfa_editor_task_1` for the first task, then `/home/zouyi/gfa_editor_task_2`, `/home/zouyi/gfa_editor_task_3`, and so on for later tasks.
+
+You can also choose a parent folder explicitly. Reusing the same parent folder is safe because the script always creates the next unused task subfolder:
+
+```bash
+GFA_EDITOR_PUBLIC_HOST=192.168.220.49 bash /home/zouyi/GFA_Editor-main/scripts/start_remote.sh /home/zouyi/gfa-editor-data
 ```
 
 The script binds the service to `0.0.0.0`, starts from port `8000`, checks which GFA Editor ports are already occupied on the server, prints the occupied-port count, and automatically chooses the next free port if needed.
-
-If the server IP shown in the printed URL is not the address other computers should use, provide it explicitly:
-
-```bash
-GFA_EDITOR_PUBLIC_HOST=192.168.220.49 bash scripts/start_remote.sh /home/zouyi/gfa-editor-data/user-a
-```
 
 4. Open the address printed by the script from the client computer:
 
@@ -76,12 +79,12 @@ The actual port may be `8000` or another automatically recommended free port, su
 
 ### Per-User Remote Services
 
-Use one server process per user or task. Each service must use a different data directory so saved server files, edits, and operation history do not interfere with another user's work.
+Use one server process per user or task. Each service gets a different auto-created data directory so saved server files, edits, and operation history do not interfere with another user's work.
 
-To start another independent service, run the same script with a different folder:
+To start another independent service, run the same command again. If the same parent folder already contains `gfa_editor_task_1`, the script creates `gfa_editor_task_2`:
 
 ```bash
-bash scripts/start_remote.sh /home/zouyi/gfa-editor-data/user-b
+GFA_EDITOR_PUBLIC_HOST=192.168.220.49 bash /home/zouyi/GFA_Editor-main/scripts/start_remote.sh /home/zouyi/gfa-editor-data
 ```
 
 If port `8000` is already unavailable, the script does not ask you to type another port. It reports how many GFA Editor ports are occupied, selects a free port, starts the service, and prints the new access URL.
