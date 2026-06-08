@@ -13,6 +13,51 @@ let repeatResolutionContext = null;
 let serverSavePathAuto = true;
 let serverSaveSourceName = null;
 const DEFAULT_TEXT_EXPORT_FORMAT = "gfa";
+const SESSION_STORAGE_KEY = "gfa-editor-session-id";
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+const CLIENT_SESSION_ID = loadClientSessionId();
+
+function createClientSessionId() {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  const randomPart = Math.random().toString(36).slice(2);
+  return `session-${Date.now().toString(36)}-${randomPart}`;
+}
+
+function loadClientSessionId() {
+  const urlSessionId = new URLSearchParams(window.location.search).get("session");
+  if (urlSessionId && SESSION_ID_PATTERN.test(urlSessionId)) {
+    try {
+      window.localStorage?.setItem(SESSION_STORAGE_KEY, urlSessionId);
+    } catch {
+      // Ignore private browsing or locked-down storage.
+    }
+    return urlSessionId;
+  }
+  try {
+    const stored = window.localStorage?.getItem(SESSION_STORAGE_KEY);
+    if (stored && SESSION_ID_PATTERN.test(stored)) {
+      return stored;
+    }
+    const next = createClientSessionId();
+    window.localStorage?.setItem(SESSION_STORAGE_KEY, next);
+    return next;
+  } catch {
+    if (!window.__gfaEditorSessionId) {
+      window.__gfaEditorSessionId = createClientSessionId();
+    }
+    return window.__gfaEditorSessionId;
+  }
+}
+
+function apiFetch(input, options = {}) {
+  const nextOptions = { ...options };
+  const headers = new Headers(nextOptions.headers || {});
+  headers.set("X-GFA-Session-Id", CLIENT_SESSION_ID);
+  nextOptions.headers = headers;
+  return fetch(input, nextOptions);
+}
 
 const alignmentPresets = {
   blastn: [
@@ -762,7 +807,7 @@ async function downloadExport(format = DEFAULT_TEXT_EXPORT_FORMAT) {
   if (!graphState) return;
   try {
     setStatus(`Exporting ${format.toUpperCase()}...`);
-    const response = await fetch(`/api/export?format=${encodeURIComponent(format)}`);
+    const response = await apiFetch(`/api/export?format=${encodeURIComponent(format)}`);
     if (!response.ok) {
       throw new Error(await readError(response));
     }
@@ -790,7 +835,7 @@ async function quickDownloadExport() {
   const format = DEFAULT_TEXT_EXPORT_FORMAT;
   try {
     setStatus(`Exporting ${format.toUpperCase()}...`);
-    const response = await fetch(`/api/export?format=${encodeURIComponent(format)}`);
+    const response = await apiFetch(`/api/export?format=${encodeURIComponent(format)}`);
     if (!response.ok) {
       throw new Error(await readError(response));
     }
@@ -831,7 +876,7 @@ async function downloadSelectedExport() {
   }
   try {
     setStatus(`Exporting selected links as ${format.toUpperCase()}...`);
-    const response = await fetch("/api/export_selection", {
+    const response = await apiFetch("/api/export_selection", {
       method: "POST",
       body: JSON.stringify({ edge_ids: edgeIds, format }),
       headers: { "Content-Type": "application/json" },
@@ -861,7 +906,7 @@ async function downloadEditHistory() {
   if (!graphState) return;
   try {
     setStatus("Exporting edit history...");
-    const response = await fetch("/api/export_history");
+    const response = await apiFetch("/api/export_history");
     if (!response.ok) {
       throw new Error(await readError(response));
     }
@@ -908,7 +953,7 @@ async function renderHistoryFromFiles() {
     formData.append("gfa_file", gfaFile);
     formData.append("history_file", historyFile);
     formData.append("keep_sequences", dom.keepSequences.checked ? "true" : "false");
-    const response = await fetch("/api/render_history", {
+    const response = await apiFetch("/api/render_history", {
       method: "POST",
       body: formData,
     });
@@ -943,7 +988,7 @@ async function inferHistoryFromFiles() {
     formData.append("old_gfa_file", oldFile);
     formData.append("new_gfa_file", newFile);
     formData.append("keep_sequences", dom.keepSequences.checked ? "true" : "false");
-    const response = await fetch("/api/infer_history", {
+    const response = await apiFetch("/api/infer_history", {
       method: "POST",
       body: formData,
     });
@@ -978,7 +1023,7 @@ async function runAlignmentFromQueryFile() {
     formData.append("tool", tool);
     formData.append("extra_args", dom.alignmentExtraArgs.value || "");
     formData.append("target_role", dom.alignmentTargetRole.value || "subject");
-    const response = await fetch("/api/run_alignment", {
+    const response = await apiFetch("/api/run_alignment", {
       method: "POST",
       body: formData,
     });
@@ -1000,7 +1045,7 @@ async function selectAlignmentRead() {
   const readId = dom.alignmentReadSelect.value || "__all__";
   try {
     setStatus(readId === "__all__" ? "Showing all reads..." : `Showing ${readId}...`);
-    const response = await fetch("/api/alignment_select_read", {
+    const response = await apiFetch("/api/alignment_select_read", {
       method: "POST",
       body: JSON.stringify({ read_id: readId }),
       headers: { "Content-Type": "application/json" },
@@ -1990,7 +2035,7 @@ function isBackendExportFormat(format) {
 
 async function loadServerFiles() {
   try {
-    const response = await fetch("/api/server_files");
+    const response = await apiFetch("/api/server_files");
     if (!response.ok) {
       throw new Error(await readError(response));
     }
@@ -2042,7 +2087,7 @@ async function saveGraphToServer() {
   const path = dom.serverSavePath.value.trim();
   try {
     setStatus(`Saving ${format.toUpperCase()} to local workspace...`);
-    const response = await fetch("/api/save_server_file", {
+    const response = await apiFetch("/api/save_server_file", {
       method: "POST",
       body: JSON.stringify({ path: path || null, format }),
       headers: { "Content-Type": "application/json" },
@@ -2078,7 +2123,7 @@ function sftpPayload(extra = {}) {
 async function downloadFromSftp() {
   try {
     setStatus("Downloading GFA via SFTP...");
-    const response = await fetch("/api/sftp_download", {
+    const response = await apiFetch("/api/sftp_download", {
       method: "POST",
       body: JSON.stringify(sftpPayload()),
       headers: { "Content-Type": "application/json" },
@@ -2103,7 +2148,7 @@ async function uploadToSftp() {
   }
   try {
     setStatus("Uploading via SFTP...");
-    const response = await fetch("/api/sftp_upload", {
+    const response = await apiFetch("/api/sftp_upload", {
       method: "POST",
       body: JSON.stringify(sftpPayload({ format: DEFAULT_TEXT_EXPORT_FORMAT })),
       headers: { "Content-Type": "application/json" },
@@ -2385,7 +2430,7 @@ function updateAlignmentCommandPreview() {
 
 async function tryLoadExistingGraph() {
   try {
-    const response = await fetch("/api/graph");
+    const response = await apiFetch("/api/graph");
     if (!response.ok) return;
     renderGraph(await response.json(), { relayout: true });
     setStatus("Ready");
@@ -2441,7 +2486,7 @@ async function mergeSelectedLink() {
   const layoutSnapshot = captureMergeLayoutSnapshot();
   try {
     setStatus("Updating graph...");
-    const response = await fetch(path, {
+    const response = await apiFetch(path, {
       method: "POST",
       body: JSON.stringify(body),
       headers: { "Content-Type": "application/json" },
@@ -2643,7 +2688,7 @@ async function postJsonAction(path, payload, success) {
 async function callAndRender(path, options) {
   try {
     setStatus(options.loading || "Loading...");
-    const response = await fetch(path, options);
+    const response = await apiFetch(path, options);
     if (!response.ok) {
       const error = await readError(response);
       throw new Error(error);

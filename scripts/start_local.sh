@@ -6,7 +6,13 @@ cd "$ROOT_DIR"
 
 HOST="${GFA_EDITOR_HOST:-127.0.0.1}"
 PORT="${GFA_EDITOR_PORT:-8000}"
-URL="http://${HOST}:${PORT}"
+HEALTH_HOST="$HOST"
+DISPLAY_HOST="${GFA_EDITOR_PUBLIC_HOST:-$HOST}"
+if [[ "$HOST" == "0.0.0.0" ]]; then
+  HEALTH_HOST="127.0.0.1"
+fi
+URL="http://${DISPLAY_HOST}:${PORT}"
+HEALTH_URL="http://${HEALTH_HOST}:${PORT}"
 PID_DIR="$ROOT_DIR/.local"
 PID_FILE="$PID_DIR/gfa-editor.pid"
 LOG_FILE="${GFA_EDITOR_LOG:-$ROOT_DIR/uvicorn.log}"
@@ -42,7 +48,7 @@ open_url() {
 }
 
 health_check() {
-  "$PYTHON" - "$URL" <<'PY' >/dev/null 2>&1
+  "$PYTHON" - "$HEALTH_URL" <<'PY' >/dev/null 2>&1
 import sys
 from urllib.request import urlopen
 urlopen(sys.argv[1] + "/api/health", timeout=1).read()

@@ -4,20 +4,24 @@
 from __future__ import annotations
 
 import copy
+import contextvars
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import io
 import json
 import os
 import posixpath
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -54,6 +58,16 @@ ROOT_DIR = Path(os.environ.get("GFA_EDITOR_ROOT", Path(__file__).resolve().paren
 FRONTEND_DIR = Path(os.environ.get("GFA_EDITOR_FRONTEND_DIR", ROOT_DIR / "frontend")).resolve()
 SERVER_DATA_DIR = Path(os.environ.get("GFA_EDITOR_DATA_DIR", ROOT_DIR / "server_data")).expanduser()
 SERVER_FILE_EXTENSIONS = {".gfa", ".txt"}
+SESSION_HEADER = "X-GFA-Session-Id"
+SESSION_COOKIE = "gfa_editor_session"
+DEFAULT_SESSION_ID = "default"
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+MAX_SESSIONS = max(1, int(os.environ.get("GFA_EDITOR_MAX_SESSIONS", "64")))
+SESSION_TTL_SECONDS = max(60, int(os.environ.get("GFA_EDITOR_SESSION_TTL_SECONDS", "86400")))
+current_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "gfa_editor_session_id",
+    default=DEFAULT_SESSION_ID,
+)
 
 
 @dataclass
@@ -73,6 +87,7 @@ class SessionState:
 
 class EditorSession:
     def __init__(self) -> None:
+        self.lock = threading.RLock()
         self.graph: Optional[GfaGraph] = None
         self.undo_stack: List[SessionState] = []
         self.redo_stack: List[SessionState] = []
@@ -465,7 +480,70 @@ class EditorSession:
         self.history_trace_index = None
 
 
-session = EditorSession()
+session_registry_lock = threading.Lock()
+session_registry: Dict[str, EditorSession] = {}
+session_last_seen: Dict[str, float] = {}
+
+
+def normalize_session_id(raw_session_id: Optional[str]) -> str:
+    if not raw_session_id:
+        return DEFAULT_SESSION_ID
+    candidate = raw_session_id.strip()
+    if SESSION_ID_RE.fullmatch(candidate):
+        return candidate
+    return DEFAULT_SESSION_ID
+
+
+def prune_sessions(now: float) -> None:
+    expired_ids = [
+        session_id
+        for session_id, last_seen in session_last_seen.items()
+        if session_id != DEFAULT_SESSION_ID and now - last_seen > SESSION_TTL_SECONDS
+    ]
+    for session_id in expired_ids:
+        session_registry.pop(session_id, None)
+        session_last_seen.pop(session_id, None)
+
+    overflow = len(session_registry) - MAX_SESSIONS
+    if overflow <= 0:
+        return
+    removable_ids = sorted(
+        (session_id for session_id in session_registry if session_id != DEFAULT_SESSION_ID),
+        key=lambda session_id: session_last_seen.get(session_id, 0),
+    )
+    for session_id in removable_ids[:overflow]:
+        session_registry.pop(session_id, None)
+        session_last_seen.pop(session_id, None)
+
+
+def get_editor_session(session_id: str) -> EditorSession:
+    now = time.monotonic()
+    with session_registry_lock:
+        prune_sessions(now)
+        if session_id not in session_registry:
+            session_registry[session_id] = EditorSession()
+        session_last_seen[session_id] = now
+        return session_registry[session_id]
+
+
+class SessionProxy:
+    def _target(self) -> EditorSession:
+        return get_editor_session(current_session_id.get(DEFAULT_SESSION_ID))
+
+    def __getattr__(self, name: str) -> Any:
+        target = self._target()
+        attr = getattr(target, name)
+        if not callable(attr):
+            return attr
+
+        def locked_call(*args: Any, **kwargs: Any) -> Any:
+            with target.lock:
+                return attr(*args, **kwargs)
+
+        return locked_call
+
+
+session = SessionProxy()
 
 
 def server_data_root() -> Path:
@@ -820,6 +898,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def bind_editor_session(request: Request, call_next):
+    raw_session_id = (
+        request.headers.get(SESSION_HEADER)
+        or request.query_params.get("gfa_session")
+        or request.query_params.get("session")
+        or request.cookies.get(SESSION_COOKIE)
+    )
+    session_id = normalize_session_id(raw_session_id)
+    token = current_session_id.set(session_id)
+    try:
+        response = await call_next(request)
+        response.headers[SESSION_HEADER] = session_id
+        return response
+    finally:
+        current_session_id.reset(token)
 
 
 @app.get("/api/health")

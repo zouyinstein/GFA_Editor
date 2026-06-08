@@ -35,6 +35,60 @@ You can also keep the existing process running and use another port:
 GFA_EDITOR_PORT=8010 scripts/start_local.sh
 ```
 
+### Linux Server Access
+
+To run GFA Editor on a Linux server and access it from another computer on the same network:
+
+1. Download or unzip `GFA_Editor-main` on the server, then enter the project directory:
+
+```bash
+cd /home/zouyi/GFA_Editor-main
+```
+
+Replace `/home/zouyi/GFA_Editor-main` with the actual server path if needed.
+
+2. Install the local Python environment and dependencies:
+
+```bash
+bash scripts/setup_local_dev.sh
+```
+
+3. Start one remote service with a data directory that belongs only to this user or task:
+
+```bash
+bash scripts/start_remote.sh /home/zouyi/gfa-editor-data/user-a
+```
+
+The script binds the service to `0.0.0.0`, starts from port `8000`, checks which GFA Editor ports are already occupied on the server, prints the occupied-port count, and automatically chooses the next free port if needed.
+
+If the server IP shown in the printed URL is not the address other computers should use, provide it explicitly:
+
+```bash
+GFA_EDITOR_PUBLIC_HOST=192.168.220.49 bash scripts/start_remote.sh /home/zouyi/gfa-editor-data/user-a
+```
+
+4. Open the address printed by the script from the client computer:
+
+```text
+http://192.168.220.49:8000/
+```
+
+The actual port may be `8000` or another automatically recommended free port, such as `8001`.
+
+### Per-User Remote Services
+
+Use one server process per user or task. Each service must use a different data directory so saved server files, edits, and operation history do not interfere with another user's work.
+
+To start another independent service, run the same script with a different folder:
+
+```bash
+bash scripts/start_remote.sh /home/zouyi/gfa-editor-data/user-b
+```
+
+If port `8000` is already unavailable, the script does not ask you to type another port. It reports how many GFA Editor ports are occupied, selects a free port, starts the service, and prints the new access URL.
+
+If the browser cannot connect, allow the printed TCP port through the server firewall.
+
 By default, GFA Editor only reads and writes data on your local machine. It interacts with external paths or remote servers only when you explicitly use the Files server data directory or SFTP features.
 
 ## 2. Interface Layout
