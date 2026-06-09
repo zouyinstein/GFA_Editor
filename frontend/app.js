@@ -177,45 +177,56 @@ const BANDAGE_MODE_CONFIGS = {
     radialExpansionMinRadius: 380,
     flexibleGlyphs: true,
     segmentSpringStrength: 1.18,
-    restShapeStrength: 0.1,
+    restShapeStrength: 0.14,
     flexibleGlyphStrength: 1.25,
     flexiblePointMaxMove: 22,
-    pointRepulsionStrength: 0.42,
-    pointRepulsionPadding: 30,
-    segmentCrossingStrength: 18,
+    pointRepulsionStrength: 0.58,
+    pointRepulsionPadding: 38,
+    segmentCrossingStrength: 24,
+    endpointSeparationMin: 44,
+    endpointSeparationWidthFactor: 2.8,
+    endpointSeparationLengthFactor: 0.45,
+    endpointSeparationStrength: 1.05,
+    endpointSeparationConstraintStrength: 0.7,
+    endpointSeparationPenalty: 5,
+    endpointSeparationPasses: 2,
+    selfIntersectionPenalty: 7000,
+    selfOverlapPenalty: 1.2,
+    linkGlyphPenalty: 5,
+    linkGlyphPadding: 16,
     nativeFoldAmplitudeFactor: 0.35,
     targetTurnAngleDeg: 148,
     turnAngleMinDeg: 118,
     turnAngleMaxDeg: 170,
     turnAngleStrength: 0.3,
     turnAngleConstraintPasses: 0,
-    endpointRefineIterations: 85,
-    endpointRefineStrength: 1.8,
+    endpointRefineIterations: 42,
+    endpointRefineStrength: 0.82,
     segmentConstraintPasses: 5,
-    redrawCandidatesSmall: 1,
-    redrawCandidatesMedium: 1,
+    redrawCandidatesSmall: 4,
+    redrawCandidatesMedium: 2,
     redrawCandidatesLarge: 1,
-    redrawJitterRadius: 95,
+    redrawJitterRadius: 140,
     simulationIterationsSmall: 370,
     simulationIterationsLarge: 210,
-    simulationChargeDistanceMax: 260,
-    simulationCollisionRadiusFactor: 2.0,
-    simulationCollisionStrength: 0.36,
+    simulationChargeDistanceMax: 330,
+    simulationCollisionRadiusFactor: 2.45,
+    simulationCollisionStrength: 0.46,
     simulationInternalStrength: 0.2,
-    simulationLinkStrength: 0.92,
-    simulationRepulsionStrength: 3900,
-    simulationSegmentCollisionStrength: 0.52,
+    simulationLinkStrength: 0.68,
+    simulationRepulsionStrength: 5600,
+    simulationSegmentCollisionStrength: 0.68,
     simulationSegmentCollisionEvery: 3,
-    simulationSegmentPadding: 14,
-    simulationSameNodeRepulsionFactor: 0.62,
+    simulationSegmentPadding: 22,
+    simulationSameNodeRepulsionFactor: 0.82,
     simulationCenterStrength: 0.0008,
     simulationMaxMove: 22,
     simulationUntanglePasses: 72,
     simulationUntangleEvery: 2,
-    simulationUntangleCrossingForce: 20,
-    simulationUntangleOverlapStrength: 0.3,
+    simulationUntangleCrossingForce: 26,
+    simulationUntangleOverlapStrength: 0.44,
     simulationUntangleMaxMove: 24,
-    simulationRetightenPasses: 26,
+    simulationRetightenPasses: 12,
     virtualCose: false,
     virtualCoseIterationsSmall: 320,
     virtualCoseIterationsLarge: 180,
@@ -230,8 +241,8 @@ const BANDAGE_MODE_CONFIGS = {
     crossingResolveStrength: 8,
     overlapPenalty: 1,
     intersectionPenalty: 9000,
-    linkLengthPenalty: 0.32,
-    areaPenalty: 0.0008,
+    linkLengthPenalty: 0.12,
+    areaPenalty: 0.00032,
     angleRelaxStep: 0.14,
     angleRelaxFinal: 0.74,
     maxMove: 32,
@@ -260,9 +271,10 @@ const BANDAGE_MODE_CONFIGS = {
     fallbackGlyphMin: 30,
     fallbackGlyphMax: 360,
     fallbackGlyphMultiplier: 1.15,
-    linkDistanceSmall: 4,
-    linkDistanceMedium: 4,
-    linkDistanceLarge: 4,
+    linkDistanceSmall: 34,
+    linkDistanceMedium: 28,
+    linkDistanceLarge: 22,
+    linkDistanceWidthFactor: 1.8,
     iterationsSmall: 400,
     iterationsLarge: 220,
   },
@@ -4573,11 +4585,16 @@ function layoutFlexibleBandageGraph(visibleNodes, visibleEdges, adjacency, confi
   });
   runFlexibleSimulation(visibleNodes, visibleEdges, config);
   constrainFlexibleSegmentLengths(visibleNodes, config, Math.max(2, Math.floor((config.segmentConstraintPasses || 4) / 2)));
+  constrainFlexibleEndpointSeparation(visibleNodes, config, config.endpointSeparationPasses || 1);
   const turnPasses = config.turnAngleConstraintPasses ?? 2;
   if (turnPasses > 0) {
     constrainFlexibleTurnAngles(visibleNodes, config, turnPasses);
   }
+  constrainFlexibleEndpointSeparation(visibleNodes, config, config.endpointSeparationPasses || 1);
   resolveFlexibleSegmentOverlaps(visibleNodes, config);
+  constrainFlexibleEndpointSeparation(visibleNodes, config, 1);
+  constrainFlexibleSegmentLengths(visibleNodes, config, 1);
+  constrainFlexibleEndpointSeparation(visibleNodes, config, 1);
   visibleNodes.forEach((node) => {
     syncFlexibleGlyphState(node, bandageState.nodes.get(node.id), config);
   });
@@ -4602,6 +4619,7 @@ function runFlexibleSimulation(visibleNodes, visibleEdges, config) {
       .map((link) => simulationNodePairKey(link.sourcePoint.nodeId, link.targetPoint.nodeId)),
   );
   const pointIndexesByNode = groupSimulationPointsByNode(points);
+  const nodeById = new Map(visibleNodes.map((node) => [node.id, node]));
   const segments = indexedLinks
     .filter((link) => link.kind === "segment")
     .map((link) => ({
@@ -4629,6 +4647,7 @@ function runFlexibleSimulation(visibleNodes, visibleEdges, config) {
     const alpha = 1 - step / Math.max(refinementIterations, 1);
     const displacements = makeSimulationDisplacements(points.length);
     addFlexibleSimulationSprings(points, indexedLinks, displacements, config, alpha);
+    addFlexibleSimulationEndpointSeparation(points, pointIndexesByNode, nodeById, displacements, config, alpha);
     addFlexibleSimulationRepulsion(points, displacements, linkedPairs, config, alpha);
     if (step % collisionEvery === 0) {
       addFlexibleSimulationSegmentCollisions(points, segments, displacements, gfaPairs, config, alpha, step);
@@ -4660,6 +4679,7 @@ function runFlexibleSimulation(visibleNodes, visibleEdges, config) {
     Math.min(18, Math.floor((config.simulationUntanglePasses || 0) / 3)),
   );
   constrainFlexibleSimulationSegmentLengths(points, segments, 3, 0.55);
+  constrainFlexibleSimulationEndpointSeparation(points, pointIndexesByNode, nodeById, config, 2, 0.7);
   writeFlexibleSimulationPoints(points);
   window.__bandageLastSimulation.elapsedMs = Math.round(performance.now() - startedAt);
 }
@@ -4883,6 +4903,61 @@ function addFlexibleSimulationSprings(points, links, displacements, config, alph
     displacements.dx[link.targetIndex] -= fx;
     displacements.dy[link.targetIndex] -= fy;
   });
+}
+
+function simulationEndpointIndexes(points, indexes) {
+  if (!indexes?.length) return null;
+  let startIndex = indexes[0];
+  let endIndex = indexes[0];
+  indexes.forEach((index) => {
+    if (points[index].index < points[startIndex].index) startIndex = index;
+    if (points[index].index > points[endIndex].index) endIndex = index;
+  });
+  return startIndex === endIndex ? null : { startIndex, endIndex };
+}
+
+function addFlexibleSimulationEndpointSeparation(points, pointIndexesByNode, nodeById, displacements, config, alpha) {
+  const strength = config.endpointSeparationStrength || 0;
+  if (!strength) return;
+  const cooling = 0.3 + alpha * 0.7;
+  pointIndexesByNode.forEach((indexes, nodeId) => {
+    const node = nodeById.get(nodeId);
+    const endpointIndexes = simulationEndpointIndexes(points, indexes);
+    if (!node || !endpointIndexes) return;
+    const start = points[endpointIndexes.startIndex];
+    const end = points[endpointIndexes.endIndex];
+    const minDistance = getFlexibleEndpointSeparationDistance(node, config);
+    const vector = flexibleEndpointVector([start, end], `${nodeId}:simulation`);
+    if (vector.distance >= minDistance) return;
+    const force = Math.min(
+      config.endpointSeparationMaxForce || 18,
+      (minDistance - vector.distance) * 0.5 * strength * cooling,
+    );
+    displacements.dx[endpointIndexes.startIndex] -= vector.x * force;
+    displacements.dy[endpointIndexes.startIndex] -= vector.y * force;
+    displacements.dx[endpointIndexes.endIndex] += vector.x * force;
+    displacements.dy[endpointIndexes.endIndex] += vector.y * force;
+  });
+}
+
+function constrainFlexibleSimulationEndpointSeparation(points, pointIndexesByNode, nodeById, config, passes, strength = 0.6) {
+  for (let pass = 0; pass < passes; pass += 1) {
+    pointIndexesByNode.forEach((indexes, nodeId) => {
+      const node = nodeById.get(nodeId);
+      const endpointIndexes = simulationEndpointIndexes(points, indexes);
+      if (!node || !endpointIndexes) return;
+      const start = points[endpointIndexes.startIndex];
+      const end = points[endpointIndexes.endIndex];
+      const minDistance = getFlexibleEndpointSeparationDistance(node, config);
+      const vector = flexibleEndpointVector([start, end], `${nodeId}:simulation-constraint`);
+      if (vector.distance >= minDistance) return;
+      const correction = (minDistance - vector.distance) * 0.5 * strength;
+      start.x -= vector.x * correction;
+      start.y -= vector.y * correction;
+      end.x += vector.x * correction;
+      end.y += vector.y * correction;
+    });
+  }
 }
 
 function addFlexibleSimulationRepulsion(points, displacements, linkedPairs, config, alpha) {
@@ -5222,6 +5297,7 @@ function scoreFlexibleLayout(visibleNodes, visibleEdges, config) {
     const aNode = visibleNodes[i];
     const a = getGlyphGeometry(aNode.id);
     if (!a) continue;
+    score += scoreGlyphSelfLayout(a, config);
     for (let j = i + 1; j < visibleNodes.length; j += 1) {
       const bNode = visibleNodes[j];
       const b = getGlyphGeometry(bNode.id);
@@ -5248,12 +5324,89 @@ function scoreFlexibleLayout(visibleNodes, visibleEdges, config) {
     if (!geometry) return;
     const linkLength = Math.hypot(geometry.target.x - geometry.source.x, geometry.target.y - geometry.source.y);
     score += linkLength * linkLength * (config.linkLengthPenalty || 0);
+    score += scoreLinkGlyphClearance(edge, geometry, visibleNodes, config);
   });
   const bounds = getFlexibleLayoutBounds(visibleNodes);
   if (bounds) {
     score += bounds.width * bounds.height * (config.areaPenalty || 0);
   }
+  visibleNodes.forEach((node) => {
+    const state = bandageState.nodes.get(node.id);
+    const points = state?.points;
+    if (!points || points.length < 2) return;
+    const minDistance = getFlexibleEndpointSeparationDistance(node, config);
+    const vector = flexibleEndpointVector(points, node.id);
+    if (vector.distance < minDistance) {
+      score += Math.pow(minDistance - vector.distance, 2) * (config.endpointSeparationPenalty || 0);
+    }
+  });
   return score;
+}
+
+function scoreGlyphSelfLayout(glyph, config) {
+  const segments = glyphSegments(glyph);
+  if (segments.length < 4) return 0;
+  let score = 0;
+  const minDistance = glyph.width + (config.simulationSegmentPadding || 12);
+  for (let i = 0; i < segments.length; i += 1) {
+    for (let j = i + 2; j < segments.length; j += 1) {
+      if (i === 0 && j === segments.length - 1) continue;
+      const a = segments[i];
+      const b = segments[j];
+      if (segmentsIntersect(a.start, a.end, b.start, b.end)) {
+        score += config.selfIntersectionPenalty || 5000;
+        continue;
+      }
+      const closest = closestSegmentsVector(a.start, a.end, b.start, b.end, `self:${i}:${j}`);
+      if (closest.distance < minDistance) {
+        score += Math.pow(minDistance - closest.distance, 2) * (config.selfOverlapPenalty || 1);
+      }
+    }
+  }
+  return score;
+}
+
+function scoreLinkGlyphClearance(edge, geometry, visibleNodes, config) {
+  const samples = quadraticSamplePoints(geometry.source, geometry.control, geometry.target, 10).slice(2, -2);
+  if (!samples.length) return 0;
+  const minDistance = displayContigWidth() + (config.linkGlyphPadding || 12);
+  let score = 0;
+  visibleNodes.forEach((node) => {
+    if (node.id === edge.source || node.id === edge.target) return;
+    const glyph = getGlyphGeometry(node.id);
+    if (!glyph) return;
+    samples.forEach((point) => {
+      const vector = pointToGlyphVector(point, glyph);
+      if (vector.distance < minDistance) {
+        score += Math.pow(minDistance - vector.distance, 2) * (config.linkGlyphPenalty || 1);
+      }
+    });
+  });
+  return score;
+}
+
+function closestSegmentsVector(aStart, aEnd, bStart, bEnd, seed) {
+  if (segmentsIntersect(aStart, aEnd, bStart, bEnd)) {
+    return centerDirection(midpoint(aStart, aEnd), midpoint(bStart, bEnd), seed, 0);
+  }
+  const candidates = [
+    pointToSegmentVector(aStart, bStart, bEnd),
+    pointToSegmentVector(aEnd, bStart, bEnd),
+    invertVector(pointToSegmentVector(bStart, aStart, aEnd)),
+    invertVector(pointToSegmentVector(bEnd, aStart, aEnd)),
+  ];
+  let best = candidates[0];
+  candidates.forEach((candidate) => {
+    if (candidate.distance < best.distance) best = candidate;
+  });
+  if (best.distance < 0.001) {
+    return centerDirection(midpoint(aStart, aEnd), midpoint(bStart, bEnd), seed, best.distance);
+  }
+  return {
+    distance: best.distance,
+    x: best.x / best.distance,
+    y: best.y / best.distance,
+  };
 }
 
 function getFlexibleLayoutBounds(visibleNodes) {
@@ -5268,6 +5421,38 @@ function getFlexibleLayoutBounds(visibleNodes) {
   const minY = Math.min(...points.map((point) => point.y));
   const maxY = Math.max(...points.map((point) => point.y));
   return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+}
+
+function getFlexibleEndpointSeparationDistance(node, config) {
+  const widthBased = Math.max(
+    config.endpointSeparationMin || 0,
+    displayContigWidth() * (config.endpointSeparationWidthFactor || 2.4),
+  );
+  const lengthBased = Math.max(1, getBandageGlyphLength(node)) * (config.endpointSeparationLengthFactor || 0.45);
+  return Math.min(widthBased, lengthBased);
+}
+
+function flexibleEndpointVector(points, seed) {
+  const start = points[0];
+  const end = points[points.length - 1];
+  let dx = end.x - start.x;
+  let dy = end.y - start.y;
+  let distance = Math.hypot(dx, dy);
+  if (distance >= 0.001) {
+    return { distance, x: dx / distance, y: dy / distance };
+  }
+  if (points.length > 3) {
+    dx = (end.x - points[points.length - 2].x) + (points[1].x - start.x);
+    dy = (end.y - points[points.length - 2].y) + (points[1].y - start.y);
+    distance = Math.hypot(dx, dy);
+  }
+  if (distance < 0.001) {
+    const angle = Math.PI * 2 * hashNumber(`${seed}:endpoint-separation`);
+    dx = Math.cos(angle);
+    dy = Math.sin(angle);
+    distance = 1;
+  }
+  return { distance: 0, x: dx / distance, y: dy / distance };
 }
 
 function makeFlexiblePointDisplacements(visibleNodes) {
@@ -5333,6 +5518,38 @@ function addFlexibleRestShape(displacements, node, config) {
       (target.x - point.x) * config.restShapeStrength,
       (target.y - point.y) * config.restShapeStrength,
     );
+  }
+}
+
+function addFlexibleEndpointSeparation(displacements, node, config) {
+  const state = bandageState.nodes.get(node.id);
+  const points = state?.points;
+  if (!points || points.length < 2) return;
+  const minDistance = getFlexibleEndpointSeparationDistance(node, config);
+  const vector = flexibleEndpointVector(points, node.id);
+  if (vector.distance >= minDistance) return;
+  const force = (minDistance - vector.distance) * 0.5 * (config.endpointSeparationStrength || 0.8);
+  addFlexiblePointDisplacement(displacements, node.id, 0, -vector.x * force, -vector.y * force);
+  addFlexiblePointDisplacement(displacements, node.id, points.length - 1, vector.x * force, vector.y * force);
+}
+
+function constrainFlexibleEndpointSeparation(visibleNodes, config, passes = 1) {
+  const strength = config.endpointSeparationConstraintStrength || 0.6;
+  for (let pass = 0; pass < passes; pass += 1) {
+    visibleNodes.forEach((node) => {
+      const state = bandageState.nodes.get(node.id);
+      const points = state?.points;
+      if (!points || points.length < 2) return;
+      const minDistance = getFlexibleEndpointSeparationDistance(node, config);
+      const vector = flexibleEndpointVector(points, node.id);
+      if (vector.distance >= minDistance) return;
+      const correction = (minDistance - vector.distance) * 0.5 * strength;
+      points[0].x -= vector.x * correction;
+      points[0].y -= vector.y * correction;
+      points[points.length - 1].x += vector.x * correction;
+      points[points.length - 1].y += vector.y * correction;
+      syncFlexibleGlyphState(node, state, config);
+    });
   }
 }
 
@@ -5505,9 +5722,11 @@ function refineFlexibleEndpointLinks(visibleNodes, visibleEdges, config) {
     visibleNodes.forEach((node) => {
       addFlexibleSegmentSprings(displacements, node, config);
       addFlexibleRestShape(displacements, node, config);
+      addFlexibleEndpointSeparation(displacements, node, config);
     });
     applyFlexiblePointDisplacements(visibleNodes, displacements, 0.34, config);
     constrainFlexibleSegmentLengths(visibleNodes, config, 1);
+    constrainFlexibleEndpointSeparation(visibleNodes, config, 1);
     constrainFlexibleTurnAngles(visibleNodes, config, 1);
   }
 }
@@ -5850,9 +6069,12 @@ function getBandageLengthScale(nodes = null) {
 
 function getBandageLinkTargetDistance(nodeCount) {
   const config = getBandageModeConfig(nodeCount);
-  if (nodeCount > 180) return config.linkDistanceLarge;
-  if (nodeCount > 70) return config.linkDistanceMedium;
-  return config.linkDistanceSmall;
+  const base = nodeCount > 180
+    ? config.linkDistanceLarge
+    : nodeCount > 70
+    ? config.linkDistanceMedium
+    : config.linkDistanceSmall;
+  return Math.max(base, displayContigWidth() * (config.linkDistanceWidthFactor || 1.4));
 }
 
 function createBandageState(node, center, angle) {

@@ -86,8 +86,8 @@ if sys.platform == "darwin":
         icon=bundle_icon,
         bundle_identifier="local.gfa-editor",
         info_plist={
-            "CFBundleShortVersionString": "1.2.5",
-            "CFBundleVersion": "1.2.5",
+            "CFBundleShortVersionString": "1.2.6",
+            "CFBundleVersion": "1.2.6",
             "NSHighResolutionCapable": True,
             "NSRequiresAquaSystemAppearance": False,
         },

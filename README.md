@@ -2,7 +2,7 @@
   <img src="frontend/app-icon.png" alt="GFA Editor app icon" width="96">
 </p>
 
-# GFA Editor v1.2.5
+# GFA Editor v1.2.6
 
 GFA Editor is a local Bandage-style viewer and editor for GFA assembly graphs. It provides Cose, Band, and Twin visualization modes, graph editing, alignment visualization, local/server file management, and GFA, FASTA, SVG, and PDF export.
 
