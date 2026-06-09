@@ -115,6 +115,7 @@ const bandageState = {
   nodes: new Map(),
   visibleNodeIds: new Set(),
   visibleEdgeIds: new Set(),
+  linkLanes: new Map(),
   transform: { x: 0, y: 0, scale: 1 },
   pointer: { down: false, mode: "pan", id: null, lastX: 0, lastY: 0 },
   marquee: null,
@@ -249,6 +250,8 @@ const BANDAGE_MODE_CONFIGS = {
     linkBendMax: 18,
     linkBendDistanceFactor: 0.16,
     linkBendSeedFactor: 9,
+    linkLaneGap: 44,
+    linkLaneMaxOffset: 112,
     maxGlyphSmall: 560,
     maxGlyphMedium: 420,
     maxGlyphLarge: 300,
@@ -1635,6 +1638,7 @@ function buildBandageSvgLayer({ selectedOnly = false, selection = null } = {}) {
   const selectedEdgeIds = new Set(selection?.edgeIds || []);
   const nodeIds = new Set(selectedNodeIds);
   const linkLayer = svgEl("g", { class: "export-bandage-link-layer" });
+  rebuildBandageLinkLanes(getVisibleBandageEdges());
   getClientEdges().forEach((edge) => {
     if (!bandageState.visibleEdgeIds.has(edge.id)) return;
     if (selectedOnly && !selectedEdgeIds.has(edge.id)) return;
@@ -2985,6 +2989,7 @@ function rebuildClientCaches(payload) {
   clientEdges = (payload?.edges || []).map((edge) => edge.data);
   clientNodeById = new Map(clientNodes.map((node) => [node.id, node]));
   clientEdgeById = new Map(clientEdges.map((edge) => [edge.id, edge]));
+  bandageState.linkLanes.clear();
 }
 
 function graphElementCount() {
@@ -2998,6 +3003,7 @@ function resetBandageStateForGraphSwitch() {
   bandageState.nodes.clear();
   bandageState.visibleNodeIds.clear();
   bandageState.visibleEdgeIds.clear();
+  bandageState.linkLanes.clear();
   bandageState.transform = { x: 0, y: 0, scale: 1 };
   bandageState.pointer = { down: false, mode: "pan", id: null, lastX: 0, lastY: 0 };
   bandageState.marquee = null;
@@ -4099,6 +4105,44 @@ function getBandageModeConfig(nodeCount = null) {
   return shouldUseFastBandageConfig(count) ? { ...base, ...BANDAGE_FAST_MODE_OVERRIDES } : base;
 }
 
+function bandageLinkNodePair(edge) {
+  if (!edge?.source || !edge?.target) return null;
+  const sourceId = String(edge.source);
+  const targetId = String(edge.target);
+  const sourceSide = getGfaEndpointSide(edge.sourceOrient, "source");
+  const targetSide = getGfaEndpointSide(edge.targetOrient, "target");
+  const forward = sourceId <= targetId;
+  return {
+    key: forward ? `${sourceId}|${targetId}` : `${targetId}|${sourceId}`,
+    directionSign: forward ? 1 : -1,
+    sortKey: `${sourceSide}|${targetSide}|${sourceId}|${targetId}|${edge.id || ""}`,
+  };
+}
+
+function rebuildBandageLinkLanes(edges = null) {
+  const visibleEdges = edges || getVisibleBandageEdges();
+  const groups = new Map();
+  bandageState.linkLanes.clear();
+  visibleEdges.forEach((edge) => {
+    const pair = bandageLinkNodePair(edge);
+    if (!pair) return;
+    if (!groups.has(pair.key)) groups.set(pair.key, []);
+    groups.get(pair.key).push({ edge, pair });
+  });
+  groups.forEach((entries) => {
+    if (entries.length <= 1) return;
+    entries.sort((a, b) => a.pair.sortKey.localeCompare(b.pair.sortKey));
+    const center = (entries.length - 1) / 2;
+    entries.forEach((entry, index) => {
+      bandageState.linkLanes.set(entry.edge.id, {
+        count: entries.length,
+        laneIndex: index - center,
+        directionSign: entry.pair.directionSign,
+      });
+    });
+  });
+}
+
 function bindBandageSvgEvents() {
   const svg = dom.bandageSvg;
   svg.addEventListener("pointerdown", (event) => {
@@ -4314,6 +4358,7 @@ function updateBandageVisibilityFromFilters() {
   bandageState.lengthScale = null;
   bandageState.visibleNodeIds.clear();
   bandageState.visibleEdgeIds.clear();
+  bandageState.linkLanes.clear();
   if (!graphState) return;
   const query = dom.nodeSearch.value.trim().toLowerCase();
   const minDepth = Number(dom.minDepth.value || 0);
@@ -4329,6 +4374,7 @@ function updateBandageVisibilityFromFilters() {
       bandageState.visibleEdgeIds.add(edge.id);
     }
   });
+  rebuildBandageLinkLanes();
   pruneBandageSelectionToVisible();
 }
 
@@ -4398,6 +4444,7 @@ function layoutBandageGraph({ reset = false } = {}) {
   bandageState.lengthScale = null;
   const visibleNodes = getVisibleBandageNodes();
   const visibleEdges = getVisibleBandageEdges();
+  rebuildBandageLinkLanes(visibleEdges);
   if (reset) {
     bandageState.layoutSeed += 1;
     if (visibleNodes.length <= BANDAGE_SEED_COSE_NODE_LIMIT) {
@@ -5602,8 +5649,10 @@ function renderBandageSvg() {
   });
   const linksLayer = svgEl("g", { class: "bandage-links" });
   const contigsLayer = svgEl("g", { class: "bandage-contigs" });
+  const visibleEdges = getVisibleBandageEdges();
+  rebuildBandageLinkLanes(visibleEdges);
 
-  getVisibleBandageEdges().forEach((edge) => {
+  visibleEdges.forEach((edge) => {
     const geometry = getLinkGeometry(edge);
     if (!geometry) return;
     const color = chooseEdgeColor(edge);
@@ -6351,12 +6400,19 @@ function getLinkGeometry(edge) {
   const normal = { x: -dy / distance, y: dx / distance };
   const bendSeed = hashNumber(`${edge.id}:bend`);
   const config = getBandageModeConfig();
-  const bend =
+  const lane = bandageState.linkLanes.get(edge.id);
+  const laneGap = config.linkLaneGap || 0;
+  const maxLaneOffset = config.linkLaneMaxOffset || 0;
+  const laneOffset = lane
+    ? clamp((lane.laneIndex || 0) * laneGap, -maxLaneOffset, maxLaneOffset) * (lane.directionSign || 1)
+    : 0;
+  const baseBend =
     Math.min(
       config.linkBendMax,
       Math.max(config.linkBendMin, distance * config.linkBendDistanceFactor + bendSeed * config.linkBendSeedFactor),
     ) *
     (hashNumber(`${edge.id}:side`) > 0.5 ? 1 : -1);
+  const bend = baseBend + laneOffset;
   const control = {
     x: (source.x + target.x) / 2 + normal.x * bend,
     y: (source.y + target.y) / 2 + normal.y * bend,
