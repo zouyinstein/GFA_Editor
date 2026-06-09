@@ -23,6 +23,7 @@ const SESSION_STORAGE_KEY = "gfa-editor-session-id";
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const DEFAULT_SPLIT_MAX_ELEMENTS = 100000;
 const DEFAULT_SPLIT_NODE_THRESHOLD = 200;
+const DEFAULT_REMAINING_CHUNK_SIZE = 50;
 const LIGHT_MODE_BANDAGE_ELEMENT_LIMIT = 1500;
 const BANDAGE_SEED_COSE_NODE_LIMIT = 750;
 const BANDAGE_FAST_MODE_NODE_LIMIT = 300;
@@ -322,6 +323,7 @@ function cacheDom() {
     "gfa-file-label",
     "keep-sequences",
     "auto-split-large-gfa",
+    "remaining-chunk-size",
     "split-summary",
     "subgraph-selector-wrap",
     "subgraph-select",
@@ -398,6 +400,11 @@ function cacheDom() {
     "rotate-circular-button",
     "repeat-resolution-a-button",
     "repeat-resolution-b-button",
+    "auto-repeat-resolution-button",
+    "auto-repeat-resolution-panel",
+    "auto-repeat-resolution-select",
+    "auto-repeat-resolution-details",
+    "auto-repeat-resolution-apply-button",
     "node-search",
     "find-node-button",
     "min-depth",
@@ -715,6 +722,7 @@ function bindEvents() {
     toggleGraphDisplayPanel(false);
     toggleGraphFilterPanel(false);
     toggleServerFilesPanel(false);
+    toggleAutoRepeatResolutionPanel(false);
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -723,6 +731,7 @@ function bindEvents() {
       toggleGraphDisplayPanel(false);
       toggleGraphFilterPanel(false);
       toggleServerFilesPanel(false);
+      toggleAutoRepeatResolutionPanel(false);
     }
   });
   dom.deleteSelectedButton.addEventListener("click", deleteSelected);
@@ -732,6 +741,10 @@ function bindEvents() {
   dom.rotateCircularButton.addEventListener("click", rotateSelectedCircularStart);
   dom.repeatResolutionAButton.addEventListener("click", () => runRepeatResolution("A"));
   dom.repeatResolutionBButton.addEventListener("click", () => runRepeatResolution("B"));
+  dom.autoRepeatResolutionButton.addEventListener("click", generateAutoRepeatResolutionCandidates);
+  dom.autoRepeatResolutionPanel.addEventListener("click", (event) => event.stopPropagation());
+  dom.autoRepeatResolutionSelect.addEventListener("change", renderAutoRepeatResolutionDetails);
+  dom.autoRepeatResolutionApplyButton.addEventListener("click", applyAutoRepeatResolutionCandidate);
 
   dom.nodeSearch.addEventListener("input", applyFilters);
   dom.findNodeButton.addEventListener("click", findNodes);
@@ -793,6 +806,7 @@ function toggleExportMenuPanel(force) {
     toggleGraphDisplayPanel(false);
     toggleGraphFilterPanel(false);
     toggleServerFilesPanel(false);
+    toggleAutoRepeatResolutionPanel(false);
   }
 }
 
@@ -803,6 +817,7 @@ function toggleGraphDrawingPanel(force) {
     toggleGraphDisplayPanel(false);
     toggleGraphFilterPanel(false);
     toggleServerFilesPanel(false);
+    toggleAutoRepeatResolutionPanel(false);
   }
 }
 
@@ -813,6 +828,7 @@ function toggleGraphDisplayPanel(force) {
     toggleGraphDrawingPanel(false);
     toggleGraphFilterPanel(false);
     toggleServerFilesPanel(false);
+    toggleAutoRepeatResolutionPanel(false);
   }
 }
 
@@ -823,6 +839,7 @@ function toggleGraphFilterPanel(force) {
     toggleGraphDrawingPanel(false);
     toggleGraphDisplayPanel(false);
     toggleServerFilesPanel(false);
+    toggleAutoRepeatResolutionPanel(false);
   }
 }
 
@@ -833,6 +850,18 @@ function toggleServerFilesPanel(force) {
     toggleGraphDrawingPanel(false);
     toggleGraphDisplayPanel(false);
     toggleGraphFilterPanel(false);
+    toggleAutoRepeatResolutionPanel(false);
+  }
+}
+
+function toggleAutoRepeatResolutionPanel(force) {
+  const opened = toggleToolbarPanel(dom.autoRepeatResolutionPanel, dom.autoRepeatResolutionButton, force);
+  if (opened) {
+    toggleExportMenuPanel(false);
+    toggleGraphDrawingPanel(false);
+    toggleGraphDisplayPanel(false);
+    toggleGraphFilterPanel(false);
+    toggleServerFilesPanel(false);
   }
 }
 
@@ -882,17 +911,35 @@ function splitRequestSettings() {
   return {
     auto_split: dom.autoSplitLargeGfa?.checked !== false,
     max_elements_per_view: DEFAULT_SPLIT_MAX_ELEMENTS,
+    remaining_chunk_size: remainingChunkSizeSetting(),
   };
+}
+
+function remainingChunkSizeSetting() {
+  const value = Number(dom.remainingChunkSize?.value || DEFAULT_REMAINING_CHUNK_SIZE);
+  if (!Number.isFinite(value) || value < 1) {
+    return DEFAULT_REMAINING_CHUNK_SIZE;
+  }
+  return Math.floor(value);
 }
 
 function appendSplitFormSettings(formData) {
   const settings = splitRequestSettings();
   formData.append("auto_split", settings.auto_split ? "true" : "false");
   formData.append("max_elements_per_view", String(settings.max_elements_per_view));
+  formData.append("remaining_chunk_size", String(settings.remaining_chunk_size));
+}
+
+function splitComponentName(component, index = 0) {
+  if (component?.isRemainingGroup) {
+    const label = String(component.label || "").trim();
+    return label && label !== "Remaining" ? label : "remaining";
+  }
+  return `subgraph_${index + 1}`;
 }
 
 function splitComponentLabel(component, index = 0) {
-  const name = component?.isRemainingGroup ? "remaining" : `subgraph_${index + 1}`;
+  const name = splitComponentName(component, index);
   return `${name}, ${number(component?.nodeCount || 0)} nodes, ${number(component?.linkCount || 0)} links`;
 }
 
@@ -940,7 +987,8 @@ function renderSplitSummary(split) {
   if (!active) return;
   const summary = document.createElement("div");
   const threshold = split.nodeSplitThreshold || DEFAULT_SPLIT_NODE_THRESHOLD;
-  summary.innerHTML = `<strong>Large graph split:</strong> ${number(split.originalNodeCount)} nodes / ${number(split.originalLinkCount)} links into ${number(split.components.length)} subgraphs. Auto threshold: ${number(threshold)} nodes.`;
+  const remainingChunkSize = split.remainingChunkSize || DEFAULT_REMAINING_CHUNK_SIZE;
+  summary.innerHTML = `<strong>Large graph split:</strong> ${number(split.originalNodeCount)} nodes / ${number(split.originalLinkCount)} links into ${number(split.components.length)} subgraphs. Auto threshold: ${number(threshold)} nodes. Remaining part size: ${number(remainingChunkSize)} nodes.`;
   dom.splitSummary.appendChild(summary);
   const selected = selectedSplitComponent(split);
   if (selected) {
@@ -3104,13 +3152,15 @@ function renderGraph(payload, options = {}) {
   const component = selectedSplitComponent(split);
   const sourceParts = [sourceName];
   if (component) {
-    sourceParts.push(component.label);
+    const componentIndex = (split.components || []).findIndex((candidate) => candidate.id === component.id);
+    sourceParts.push(splitComponentName(component, Math.max(componentIndex, 0)));
   }
   if (payload.session?.light_mode) {
     sourceParts.push("light mode");
   }
   dom.sourceName.textContent = sourceParts.join(" - ");
   renderSplitControls(split);
+  renderAutoRepeatResolutionControls(payload.session?.autoRepeatResolution);
   renderStats(payload.stats);
   renderHistogram(payload.histogram || []);
   renderHistory(payload.session || {});
@@ -3889,6 +3939,91 @@ async function runRepeatResolution(strategy) {
   }
 }
 
+async function generateAutoRepeatResolutionCandidates(event) {
+  event?.stopPropagation();
+  if (!graphState) return;
+  const payload = await callAndRender("/api/auto_repeat_resolution_candidates", {
+    method: "POST",
+    loading: "Searching repeat resolutions...",
+    success: "Repeat resolution candidates ready",
+    relayout: false,
+  });
+  if (!payload) return;
+  toggleAutoRepeatResolutionPanel(true);
+  const summary = payload.session?.autoRepeatResolution || {};
+  if (summary.warning) {
+    showToast(summary.warning);
+  }
+}
+
+async function applyAutoRepeatResolutionCandidate(event) {
+  event?.stopPropagation();
+  const candidateId = dom.autoRepeatResolutionSelect?.value;
+  if (!candidateId) {
+    showToast("Select a repeat resolution result first");
+    return;
+  }
+  const payload = await callAndRender("/api/apply_auto_repeat_resolution", {
+    method: "POST",
+    body: JSON.stringify({ candidate_id: candidateId }),
+    headers: { "Content-Type": "application/json" },
+    loading: "Applying repeat resolution...",
+    success: "Auto repeat resolution applied",
+    relayout: true,
+  });
+  if (payload) {
+    toggleAutoRepeatResolutionPanel(false);
+  }
+}
+
+function renderAutoRepeatResolutionControls(summary = {}) {
+  if (!dom.autoRepeatResolutionSelect || !dom.autoRepeatResolutionDetails) return;
+  const candidates = Array.isArray(summary?.candidates) ? summary.candidates : [];
+  const previousValue = dom.autoRepeatResolutionSelect.value;
+  dom.autoRepeatResolutionSelect.replaceChildren();
+  if (!candidates.length) {
+    dom.autoRepeatResolutionSelect.appendChild(optionEl("", "No candidates"));
+    dom.autoRepeatResolutionSelect.disabled = true;
+    if (dom.autoRepeatResolutionApplyButton) dom.autoRepeatResolutionApplyButton.disabled = true;
+    renderAutoRepeatResolutionDetails(summary);
+    return;
+  }
+  candidates.forEach((candidate) => {
+    const marker = candidate.circular ? "[circular] " : "";
+    const option = optionEl(candidate.id, `${marker}${candidate.label}`);
+    option.title = option.textContent;
+    dom.autoRepeatResolutionSelect.appendChild(option);
+  });
+  const selected = candidates.find((candidate) => candidate.id === previousValue) || candidates[0];
+  dom.autoRepeatResolutionSelect.value = selected.id;
+  dom.autoRepeatResolutionSelect.disabled = false;
+  if (dom.autoRepeatResolutionApplyButton) dom.autoRepeatResolutionApplyButton.disabled = false;
+  renderAutoRepeatResolutionDetails(summary);
+}
+
+function renderAutoRepeatResolutionDetails(summary = graphState?.session?.autoRepeatResolution || {}) {
+  if (!dom.autoRepeatResolutionDetails) return;
+  const candidates = Array.isArray(summary?.candidates) ? summary.candidates : [];
+  const candidate = candidates.find((item) => item.id === dom.autoRepeatResolutionSelect?.value);
+  dom.autoRepeatResolutionDetails.replaceChildren();
+  if (!candidate) {
+    const text = summary?.warning || "No candidates";
+    dom.autoRepeatResolutionDetails.appendChild(emptyDetails(text));
+    return;
+  }
+  const order = (candidate.order || [])
+    .map((step) => `${step.nodeId}:${step.strategy}`)
+    .join(" -> ");
+  dom.autoRepeatResolutionDetails.append(
+    detailRow("Cycle", candidate.circular ? "yes" : "no"),
+    detailRow("Resolved", number(candidate.resolvedNodeCount || 0)),
+    detailRow("Graph", `${number(candidate.nodeCount)} nodes / ${number(candidate.linkCount)} links`),
+    detailRow("Steps", number(candidate.stepCount || 0)),
+    detailRow("Merged", number(candidate.mergedOrderCount || 1)),
+    detailRow("Order", order || "-"),
+  );
+}
+
 function selectGraphNode(nodeId, options = {}) {
   if (!nodeId || !graphState) return;
   const shouldFit = options.fit !== false;
@@ -3922,6 +4057,7 @@ function updateGlobalButtons(session) {
   dom.exportHistoryButton.disabled = !hasGraph;
   dom.fitButton.disabled = !hasGraph;
   dom.deleteAllSelectedButton.disabled = true;
+  dom.autoRepeatResolutionButton.disabled = !hasGraph;
   dom.findNodeButton.disabled = !hasGraph;
   dom.drawGraphButton.disabled = !hasGraph;
   dom.drawGraphToolbarButton.disabled = !hasGraph;

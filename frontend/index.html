@@ -7,7 +7,7 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GFA Editor v1.2.4</title>
+    <title>GFA Editor v1.2.5</title>
     <link rel="stylesheet" href="/styles.css?v=20260608-v124-r1" />
     <script src="/vendor/cytoscape.min.js"></script>
     <script src="/vendor/d3.min.js"></script>
@@ -20,7 +20,7 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
         <div class="brand">
           <img class="brand-icon" src="/app-icon.png" alt="" />
           <div>
-            <h1>GFA Editor v1.2.4</h1>
+            <h1>GFA Editor v1.2.5</h1>
             <span id="source-name">No GFA loaded</span>
           </div>
         </div>
@@ -53,6 +53,10 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
             <label class="check-row compact-check">
               <input id="auto-split-large-gfa" type="checkbox" checked />
               <span>Auto-split large GFA</span>
+            </label>
+            <label class="field compact-field">
+              <span>Remaining part size</span>
+              <input id="remaining-chunk-size" type="number" min="1" max="5000" step="1" value="50" />
             </label>
             <div id="split-summary" class="split-summary" hidden></div>
           </form>
@@ -401,6 +405,32 @@ SPDX-FileCopyrightText: 2026 Yi Zou <zouyi.nju@gmail.com> and GFA Editor contrib
             <button id="repeat-resolution-b-button" class="tool-button" type="button" title="Repeat resolution B" disabled>
               <i data-lucide="git-branch"></i><span>Repeat B</span>
             </button>
+            <div class="display-menu auto-repeat-menu">
+              <button
+                id="auto-repeat-resolution-button"
+                class="tool-button compact-tool icon-only-tool"
+                type="button"
+                title="Auto repeat resolution"
+                aria-label="Auto repeat resolution"
+                aria-expanded="false"
+                aria-controls="auto-repeat-resolution-panel"
+                disabled
+              >
+                <i data-lucide="wand-sparkles"></i>
+              </button>
+              <div id="auto-repeat-resolution-panel" class="display-popover auto-repeat-popover" hidden>
+                <label class="field">
+                  <span>Result</span>
+                  <select id="auto-repeat-resolution-select" disabled>
+                    <option value="">No candidates</option>
+                  </select>
+                </label>
+                <div id="auto-repeat-resolution-details" class="auto-repeat-details">No candidates</div>
+                <button id="auto-repeat-resolution-apply-button" class="primary-button full" type="button" disabled>
+                  <i data-lucide="check"></i><span>Apply</span>
+                </button>
+              </div>
+            </div>
             <button id="merge-link-button" class="tool-button" type="button" title="Merge selected" disabled>
               <i data-lucide="combine"></i><span>Merge</span>
             </button>

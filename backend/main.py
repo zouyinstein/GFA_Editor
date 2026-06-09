@@ -66,6 +66,9 @@ SERVER_FILE_EXTENSIONS = {".gfa", ".txt"}
 SEQUENCE_LOAD_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("GFA_EDITOR_SEQUENCE_LOAD_TIMEOUT_SECONDS", "10")))
 DEFAULT_SPLIT_MAX_ELEMENTS = max(1, int(os.environ.get("GFA_EDITOR_SPLIT_MAX_ELEMENTS", "100000")))
 DEFAULT_SPLIT_NODE_THRESHOLD = max(1, int(os.environ.get("GFA_EDITOR_SPLIT_NODE_THRESHOLD", "200")))
+DEFAULT_REMAINING_CHUNK_SIZE = max(1, int(os.environ.get("GFA_EDITOR_REMAINING_CHUNK_SIZE", "50")))
+AUTO_REPEAT_MAX_STATES = max(1, int(os.environ.get("GFA_EDITOR_AUTO_REPEAT_MAX_STATES", "5000")))
+AUTO_REPEAT_MAX_CANDIDATES = max(1, int(os.environ.get("GFA_EDITOR_AUTO_REPEAT_MAX_CANDIDATES", "100")))
 CACHE_DIR_NAME = ".gfa-editor-cache"
 SESSION_HEADER = "X-GFA-Session-Id"
 SESSION_COOKIE = "gfa_editor_session"
@@ -77,6 +80,13 @@ current_session_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "gfa_editor_session_id",
     default=DEFAULT_SESSION_ID,
 )
+
+
+def coerce_positive_int(value: Any, default: int) -> int:
+    try:
+        return max(1, int(value or default))
+    except (TypeError, ValueError):
+        return max(1, int(default))
 
 
 @dataclass
@@ -130,6 +140,32 @@ class SplitComponentState:
     version: int = 1
 
 
+@dataclass
+class AutoRepeatCandidate:
+    id: str
+    graph: GfaGraph
+    steps: List[Dict[str, Any]]
+    order: List[Dict[str, Any]]
+    signature: str
+    circular: bool
+    merged_order_count: int = 1
+
+    def summary(self) -> Dict[str, Any]:
+        node_count = len(self.graph.segments)
+        link_count = len(self.graph.links)
+        return {
+            "id": self.id,
+            "label": f"Result {self.id.rsplit('_', 1)[-1]}: {node_count} nodes, {link_count} links, {len(self.steps)} steps",
+            "nodeCount": node_count,
+            "linkCount": link_count,
+            "stepCount": len(self.steps),
+            "resolvedNodeCount": len(self.order),
+            "order": copy.deepcopy(self.order),
+            "circular": self.circular,
+            "mergedOrderCount": self.merged_order_count,
+        }
+
+
 class EditorSession:
     def __init__(self) -> None:
         self.lock = threading.RLock()
@@ -160,12 +196,16 @@ class EditorSession:
         self.alignment_last_stderr: Optional[str] = None
         self.split_enabled = False
         self.split_max_elements_per_view = DEFAULT_SPLIT_MAX_ELEMENTS
+        self.split_remaining_chunk_size = DEFAULT_REMAINING_CHUNK_SIZE
         self.split_original_file_name: Optional[str] = None
         self.split_original_node_count = 0
         self.split_original_link_count = 0
         self.split_components: List[SplitComponentState] = []
         self.selected_component_id: Optional[str] = None
         self.split_warning: Optional[str] = None
+        self.auto_repeat_candidates: List[AutoRepeatCandidate] = []
+        self.auto_repeat_base_signature: Optional[str] = None
+        self.auto_repeat_warning: Optional[str] = None
 
     def has_graph(self) -> GfaGraph:
         if self.graph is None:
@@ -216,19 +256,23 @@ class EditorSession:
         sequence_load_seconds: Optional[float] = None,
         auto_split: bool = True,
         max_elements_per_view: int = DEFAULT_SPLIT_MAX_ELEMENTS,
+        remaining_chunk_size: int = DEFAULT_REMAINING_CHUNK_SIZE,
     ) -> Dict[str, Any]:
         previous_state = self._capture_state() if self.graph is not None else None
         deduplicate_links(graph)
-        max_elements_per_view = max(1, int(max_elements_per_view or DEFAULT_SPLIT_MAX_ELEMENTS))
+        max_elements_per_view = coerce_positive_int(max_elements_per_view, DEFAULT_SPLIT_MAX_ELEMENTS)
+        remaining_chunk_size = coerce_positive_int(remaining_chunk_size, DEFAULT_REMAINING_CHUNK_SIZE)
         split_components, split_warning = build_split_components(
             graph,
             max_elements_per_view=max_elements_per_view,
+            remaining_chunk_size=remaining_chunk_size,
             auto_split=auto_split,
         )
         self._clear_split()
         if split_components:
             self.split_enabled = True
             self.split_max_elements_per_view = max_elements_per_view
+            self.split_remaining_chunk_size = remaining_chunk_size
             self.split_original_file_name = source_name
             self.split_original_node_count = len(graph.segments)
             self.split_original_link_count = len(graph.links)
@@ -243,6 +287,7 @@ class EditorSession:
         self.redo_stack.clear()
         self.edit_steps.clear()
         self._clear_history_trace()
+        self._clear_auto_repeat_candidates()
         self._clear_alignment()
         self.log.clear()
         self.operation_states.clear()
@@ -283,6 +328,7 @@ class EditorSession:
             "sequence_source_size": self.sequence_source_size,
             "sequence_load_seconds": self.sequence_load_seconds,
             "split": self._split_summary(),
+            "autoRepeatResolution": self._auto_repeat_summary(),
         }
         return payload
 
@@ -295,6 +341,7 @@ class EditorSession:
             raise HTTPException(status_code=404, detail=f"Subgraph not found: {component_id}")
         if component.id == self.selected_component_id:
             return self.snapshot()
+        self._clear_auto_repeat_candidates()
         self._save_selected_split_component()
         self.selected_component_id = component.id
         self._restore_split_component(component)
@@ -322,6 +369,7 @@ class EditorSession:
     def _clear_split(self) -> None:
         self.split_enabled = False
         self.split_max_elements_per_view = DEFAULT_SPLIT_MAX_ELEMENTS
+        self.split_remaining_chunk_size = DEFAULT_REMAINING_CHUNK_SIZE
         self.split_original_file_name = None
         self.split_original_node_count = 0
         self.split_original_link_count = 0
@@ -405,6 +453,7 @@ class EditorSession:
             "originalElementCount": self.split_original_node_count + self.split_original_link_count,
             "splitEnabled": True,
             "maxElementsPerView": self.split_max_elements_per_view,
+            "remainingChunkSize": self.split_remaining_chunk_size,
             "nodeSplitThreshold": DEFAULT_SPLIT_NODE_THRESHOLD,
             "selectedComponentId": self.selected_component_id,
             "warning": self.split_warning,
@@ -413,6 +462,21 @@ class EditorSession:
                 for component in self.split_components
             ],
         }
+
+    def _auto_repeat_summary(self) -> Dict[str, Any]:
+        return {
+            "candidateCount": len(self.auto_repeat_candidates),
+            "warning": self.auto_repeat_warning,
+            "candidates": [
+                candidate.summary()
+                for candidate in self.auto_repeat_candidates
+            ],
+        }
+
+    def _clear_auto_repeat_candidates(self) -> None:
+        self.auto_repeat_candidates.clear()
+        self.auto_repeat_base_signature = None
+        self.auto_repeat_warning = None
 
     def mutate(self, action: str, details: Dict[str, Any], callback) -> Dict[str, Any]:
         graph = self.has_graph()
@@ -431,6 +495,7 @@ class EditorSession:
         event_details["edit_step_count"] = len(self.edit_steps)
         self.version += 1
         self._refresh_alignment()
+        self._clear_auto_repeat_candidates()
         self._append_log(action, event_details)
         return self.snapshot()
 
@@ -471,6 +536,7 @@ class EditorSession:
                 **result,
             },
         )
+        self._clear_auto_repeat_candidates()
         return self.snapshot()
 
     def select_alignment_read(self, read_id: Optional[str]) -> Dict[str, Any]:
@@ -481,6 +547,93 @@ class EditorSession:
         self.alignment_selected_read_id = normalized
         self._refresh_alignment()
         self.version += 1
+        return self.snapshot()
+
+    def generate_auto_repeat_resolution_candidates(self) -> Dict[str, Any]:
+        graph = self.has_graph()
+        self._clear_auto_repeat_candidates()
+        self.auto_repeat_base_signature = graph_topology_signature(graph)
+        candidates, warning = build_auto_repeat_resolution_candidates(
+            graph,
+            max_states=AUTO_REPEAT_MAX_STATES,
+            max_candidates=AUTO_REPEAT_MAX_CANDIDATES,
+        )
+        self.auto_repeat_candidates = candidates
+        self.auto_repeat_warning = warning
+        return self.snapshot()
+
+    def apply_auto_repeat_resolution_candidate(self, candidate_id: str) -> Dict[str, Any]:
+        graph = self.has_graph()
+        candidate = next(
+            (item for item in self.auto_repeat_candidates if item.id == candidate_id),
+            None,
+        )
+        if candidate is None:
+            raise HTTPException(status_code=404, detail=f"Auto repeat resolution candidate not found: {candidate_id}")
+        if self.auto_repeat_base_signature != graph_topology_signature(graph):
+            self._clear_auto_repeat_candidates()
+            raise HTTPException(status_code=409, detail="The graph changed after candidates were generated. Generate candidates again.")
+
+        initial_state = self._capture_state()
+        original_undo_stack = self._clone_state_list(self.undo_stack)
+        original_redo_stack = self._clone_state_list(self.redo_stack)
+        original_log = copy.deepcopy(self.log)
+        original_operation_states = self._clone_state_list(self.operation_states)
+        original_active_operation_state_index = self.active_operation_state_index
+        original_history_trace_snapshots = self._clone_history_trace_snapshots()
+        original_history_trace = copy.deepcopy(self.history_trace)
+        original_history_trace_index = self.history_trace_index
+
+        self.redo_stack.clear()
+        try:
+            for step in candidate.steps:
+                self.undo_stack.append(self._capture_state())
+                result = apply_edit_history(graph, {"steps": [step]})
+                applied_step = result["applied_steps"][0]
+                removed_duplicate_edges = deduplicate_links(graph)
+                self.edit_steps.append(copy.deepcopy(applied_step))
+                event_details = {
+                    **copy.deepcopy(applied_step.get("params") or {}),
+                    **copy.deepcopy(applied_step.get("result") or {}),
+                    "auto_candidate_id": candidate.id,
+                }
+                if removed_duplicate_edges:
+                    event_details["removed_duplicate_edges"] = removed_duplicate_edges
+                event_details["edit_step_count"] = len(self.edit_steps)
+                self.version += 1
+                self._refresh_alignment()
+                self._append_log(str(applied_step.get("action")), event_details)
+            if graph_topology_signature(graph) != candidate.signature:
+                raise ValueError("Applied auto repeat resolution did not reproduce the selected candidate")
+        except Exception:
+            self._restore_state(initial_state)
+            self.undo_stack = original_undo_stack
+            self.redo_stack = original_redo_stack
+            self.log = original_log
+            self.operation_states = original_operation_states
+            self.active_operation_state_index = original_active_operation_state_index
+            self.history_trace_snapshots = original_history_trace_snapshots
+            self.history_trace = original_history_trace
+            self.history_trace_index = original_history_trace_index
+            raise
+
+        self.version += 1
+        self._clear_auto_repeat_candidates()
+        self._append_log(
+            "auto_repeat_resolution",
+            {
+                "candidate_id": candidate.id,
+                "step_count": len(candidate.steps),
+                "resolved_node_count": len(candidate.order),
+                "order": [
+                    f"{item.get('nodeId')}:{item.get('strategy')}"
+                    for item in candidate.order
+                ],
+                "circular": candidate.circular,
+                "merged_order_count": candidate.merged_order_count,
+                "edit_step_count": len(self.edit_steps),
+            },
+        )
         return self.snapshot()
 
     def alignment_summary(self) -> Dict[str, Any]:
@@ -567,6 +720,7 @@ class EditorSession:
         self.redo_stack.append(self._capture_state())
         self._restore_state(self.undo_stack.pop())
         self.version += 1
+        self._clear_auto_repeat_candidates()
         if record_log:
             self._append_log("undo", {"edit_step_count": len(self.edit_steps)})
 
@@ -577,6 +731,7 @@ class EditorSession:
         self.undo_stack.append(self._capture_state())
         self._restore_state(self.redo_stack.pop())
         self.version += 1
+        self._clear_auto_repeat_candidates()
         if record_log:
             self._append_log("redo", {"edit_step_count": len(self.edit_steps)})
 
@@ -628,6 +783,7 @@ class EditorSession:
         except Exception:
             self._restore_state(self.undo_stack.pop())
             self._clear_history_trace()
+            self._clear_auto_repeat_candidates()
             raise
 
         self.edit_steps = cumulative_steps
@@ -635,6 +791,7 @@ class EditorSession:
         self.history_trace = trace_entries
         self.history_trace_index = len(trace_entries) - 1
         self.version += 1
+        self._clear_auto_repeat_candidates()
         self._append_log("import_history", {"history_name": history_name, "step_count": len(steps)})
         self.log.extend(trace_entries[1:])
         return self.snapshot()
@@ -650,6 +807,7 @@ class EditorSession:
         self.edit_steps = copy.deepcopy(edit_steps)
         self.history_trace_index = trace_index
         self.version += 1
+        self._clear_auto_repeat_candidates()
         return self.snapshot()
 
     def restore_operation_state(self, state_index: int) -> Dict[str, Any]:
@@ -664,6 +822,7 @@ class EditorSession:
         ]
         self.active_operation_state_index = state_index
         self.version += 1
+        self._clear_auto_repeat_candidates()
         return self.snapshot()
 
     def clear_operation_history(self) -> Dict[str, Any]:
@@ -835,6 +994,258 @@ class SessionProxy:
 session = SessionProxy()
 
 
+def endpoint_side(orient: str, role: str) -> str:
+    if role == "target":
+        return "+" if orient == "-" else "-"
+    return "-" if orient == "-" else "+"
+
+
+def graph_link_key(link) -> Tuple[Any, ...]:
+    endpoints = sorted(
+        (
+            (link.source, endpoint_side(link.source_orient, "source")),
+            (link.target, endpoint_side(link.target_orient, "target")),
+        )
+    )
+    tags = tuple(
+        sorted(
+            (
+                tag,
+                str(payload.get("type", "")),
+                str(payload.get("raw", payload.get("value", ""))),
+            )
+            for tag, payload in link.tags.items()
+        )
+    )
+    return (
+        tuple(endpoints),
+        link.cigar,
+        link.support,
+        tags,
+    )
+
+
+def graph_topology_signature(graph: GfaGraph) -> str:
+    nodes = [
+        (
+            node_id,
+            segment.length,
+            segment.depth,
+            tuple(
+                sorted(
+                    (
+                        tag,
+                        str(payload.get("type", "")),
+                        str(payload.get("raw", payload.get("value", ""))),
+                    )
+                    for tag, payload in segment.tags.items()
+                )
+            ),
+        )
+        for node_id, segment in sorted(graph.segments.items())
+    ]
+    links = sorted(graph_link_key(link) for link in graph.links)
+    return json.dumps({"nodes": nodes, "links": links}, sort_keys=True, separators=(",", ":"))
+
+
+def valid_graph_links(graph: GfaGraph) -> List[Any]:
+    return [
+        link
+        for link in unique_links_by_topology(graph.links)
+        if link.source in graph.segments and link.target in graph.segments
+    ]
+
+
+def unique_links_by_topology(links: List[Any]) -> List[Any]:
+    seen = set()
+    unique = []
+    for link in links:
+        key = graph_link_key(link)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(link)
+    return unique
+
+
+def graph_is_connected(graph: GfaGraph) -> bool:
+    node_ids = list(graph.segments)
+    if not node_ids:
+        return False
+    if len(node_ids) == 1:
+        return True
+    adjacency = {node_id: set() for node_id in node_ids}
+    for link in valid_graph_links(graph):
+        if link.source == link.target:
+            continue
+        adjacency[link.source].add(link.target)
+        adjacency[link.target].add(link.source)
+    seen = {node_ids[0]}
+    pending = [node_ids[0]]
+    while pending:
+        node_id = pending.pop()
+        for neighbor_id in adjacency[node_id]:
+            if neighbor_id in seen:
+                continue
+            seen.add(neighbor_id)
+            pending.append(neighbor_id)
+    return len(seen) == len(node_ids)
+
+
+def node_side_counts(graph: GfaGraph, node_id: str) -> Tuple[Dict[str, int], bool]:
+    counts = {"-": 0, "+": 0}
+    has_self_loop = False
+    for link in valid_graph_links(graph):
+        if link.source == node_id and link.target == node_id:
+            has_self_loop = True
+            continue
+        if link.source == node_id:
+            counts[endpoint_side(link.source_orient, "source")] += 1
+        if link.target == node_id:
+            counts[endpoint_side(link.target_orient, "target")] += 1
+    return counts, has_self_loop
+
+
+def auto_repeat_ready_node_ids(graph: GfaGraph) -> List[str]:
+    ready = []
+    for node_id in graph.segments:
+        counts, has_self_loop = node_side_counts(graph, node_id)
+        if not has_self_loop and counts["-"] == 2 and counts["+"] == 2:
+            ready.append(node_id)
+    return ready
+
+
+def graph_is_circular_subgraph(graph: GfaGraph) -> bool:
+    if not graph_is_connected(graph):
+        return False
+    if len(valid_graph_links(graph)) != len(graph.segments):
+        return False
+    for node_id in graph.segments:
+        counts, has_self_loop = node_side_counts(graph, node_id)
+        if has_self_loop or counts["-"] != 1 or counts["+"] != 1:
+            return False
+    return True
+
+
+def build_auto_repeat_resolution_candidates(
+    graph: GfaGraph,
+    *,
+    max_states: int,
+    max_candidates: int,
+) -> Tuple[List[AutoRepeatCandidate], Optional[str]]:
+    if not graph_is_connected(graph):
+        raise ValueError("Auto repeat resolution requires the selected subgraph to be connected")
+    targets = tuple(sorted(auto_repeat_ready_node_ids(graph)))
+    if not targets:
+        return [], "No 2-in/2-out repeat nodes were found in the selected subgraph."
+
+    states = [
+        {
+            "graph": graph.clone(),
+            "remaining": targets,
+            "steps": [],
+            "order": [],
+        }
+    ]
+    visited = set()
+    final_by_signature: Dict[str, AutoRepeatCandidate] = {}
+    explored_state_count = 0
+    truncated = False
+
+    while states:
+        state = states.pop()
+        state_graph: GfaGraph = state["graph"]
+        remaining = tuple(sorted(state["remaining"]))
+        state_key = (remaining, graph_topology_signature(state_graph))
+        if state_key in visited:
+            continue
+        visited.add(state_key)
+        explored_state_count += 1
+        if explored_state_count > max_states:
+            truncated = True
+            break
+
+        if not remaining:
+            final_signature = graph_topology_signature(state_graph)
+            existing = final_by_signature.get(final_signature)
+            if existing is not None:
+                existing.merged_order_count += 1
+                continue
+            candidate_index = len(final_by_signature) + 1
+            candidate_id = f"auto_repeat_{candidate_index:03d}"
+            final_by_signature[final_signature] = AutoRepeatCandidate(
+                id=candidate_id,
+                graph=state_graph.clone(),
+                steps=copy.deepcopy(state["steps"]),
+                order=copy.deepcopy(state["order"]),
+                signature=final_signature,
+                circular=graph_is_circular_subgraph(state_graph),
+            )
+            if len(final_by_signature) >= max_candidates:
+                truncated = bool(states)
+                break
+            continue
+
+        for node_id in remaining:
+            counts, has_self_loop = node_side_counts(state_graph, node_id)
+            if has_self_loop or counts["-"] != 2 or counts["+"] != 2:
+                continue
+            for strategy in ("A", "B"):
+                next_graph = state_graph.clone()
+                try:
+                    duplicate_result = duplicate_node(next_graph, node_id)
+                    duplicate_id = duplicate_result["new_node_id"]
+                    repeat_result = repeat_resolve_node(next_graph, node_id, duplicate_id, strategy)
+                    deduplicate_links(next_graph)
+                except (KeyError, ValueError):
+                    continue
+                if not graph_is_connected(next_graph):
+                    continue
+
+                duplicate_details = {"node_id": node_id, **duplicate_result}
+                duplicate_step = history_step_from_event("duplicate_node", duplicate_details)
+                repeat_details = {
+                    "node_id": node_id,
+                    "duplicate_id": duplicate_id,
+                    "strategy": strategy,
+                    **repeat_result,
+                }
+                repeat_step = history_step_from_event("repeat_resolution", repeat_details)
+                if duplicate_step is None or repeat_step is None:
+                    continue
+                next_remaining = tuple(candidate for candidate in remaining if candidate != node_id)
+                states.append(
+                    {
+                        "graph": next_graph,
+                        "remaining": next_remaining,
+                        "steps": [
+                            *copy.deepcopy(state["steps"]),
+                            duplicate_step,
+                            repeat_step,
+                        ],
+                        "order": [
+                            *copy.deepcopy(state["order"]),
+                            {
+                                "nodeId": node_id,
+                                "duplicateId": duplicate_id,
+                                "strategy": strategy,
+                            },
+                        ],
+                    }
+                )
+
+    candidates = list(final_by_signature.values())
+    warning = None
+    if truncated:
+        warning = (
+            f"Search stopped after {explored_state_count} states. "
+            f"Showing {len(candidates)} unique candidate results."
+        )
+    elif not candidates:
+        warning = "No connected result could resolve all 2-in/2-out repeat nodes."
+    return candidates, warning
+
+
 def server_data_root() -> Path:
     root = SERVER_DATA_DIR.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -949,9 +1360,9 @@ def subgraph_from_node_ids(graph: GfaGraph, node_ids: List[str]) -> GfaGraph:
     return GfaGraph(
         headers=copy.deepcopy(graph.headers),
         segments={
-            segment_id: copy.deepcopy(segment)
-            for segment_id, segment in graph.segments.items()
-            if segment_id in node_id_set
+            node_id: copy.deepcopy(graph.segments[node_id])
+            for node_id in node_ids
+            if node_id in node_id_set and node_id in graph.segments
         },
         links=[
             copy.deepcopy(link)
@@ -1024,9 +1435,11 @@ def build_split_components(
     graph: GfaGraph,
     *,
     max_elements_per_view: int,
+    remaining_chunk_size: int,
     auto_split: bool,
 ) -> Tuple[List[SplitComponentState], Optional[str]]:
     _ = max_elements_per_view
+    remaining_chunk_size = coerce_positive_int(remaining_chunk_size, DEFAULT_REMAINING_CHUNK_SIZE)
     if not auto_split or len(graph.segments) <= DEFAULT_SPLIT_NODE_THRESHOLD:
         return [], None
 
@@ -1064,22 +1477,27 @@ def build_split_components(
             )
         )
 
-    if remaining:
-        remaining_node_ids = set()
-        for component in remaining:
-            remaining_node_ids.update(component["node_ids"])
-        ordered_remaining_node_ids = [
-            node_id
-            for node_id in graph.segments.keys()
-            if node_id in remaining_node_ids
-        ]
+    remaining_node_ids = [
+        node_id
+        for component in remaining
+        for node_id in component["node_ids"]
+        if node_id in graph.segments
+    ]
+    remaining_node_ids = sorted(
+        dict.fromkeys(remaining_node_ids),
+        key=lambda node_id: (-graph.segments[node_id].length, node_id),
+    )
+    for part_index, offset in enumerate(range(0, len(remaining_node_ids), remaining_chunk_size), start=1):
+        chunk_node_ids = remaining_node_ids[offset : offset + remaining_chunk_size]
+        if not chunk_node_ids:
+            continue
         split_components.append(
             make_split_component(
                 graph,
-                "remaining_components",
-                "Remaining",
-                "remaining_components",
-                ordered_remaining_node_ids,
+                f"remaining_part_{part_index:03d}",
+                f"remaining_part_{part_index}",
+                f"remaining_part_{part_index:03d}",
+                chunk_node_ids,
                 is_remaining_group=True,
             )
         )
@@ -1409,6 +1827,7 @@ class ServerFileRequest(BaseModel):
     keep_sequences: bool = False
     auto_split: bool = True
     max_elements_per_view: int = DEFAULT_SPLIT_MAX_ELEMENTS
+    remaining_chunk_size: int = DEFAULT_REMAINING_CHUNK_SIZE
 
 
 class ServerSaveRequest(BaseModel):
@@ -1429,6 +1848,10 @@ class ComponentSelectionRequest(BaseModel):
     component_id: str
 
 
+class AutoRepeatResolutionApplyRequest(BaseModel):
+    candidate_id: str
+
+
 class SftpTransferRequest(BaseModel):
     host: str
     port: int = 22
@@ -1438,13 +1861,14 @@ class SftpTransferRequest(BaseModel):
     keep_sequences: bool = True
     auto_split: bool = True
     max_elements_per_view: int = DEFAULT_SPLIT_MAX_ELEMENTS
+    remaining_chunk_size: int = DEFAULT_REMAINING_CHUNK_SIZE
     format: str = "gfa"
 
 
 app = FastAPI(
-    title="GFA Editor v1.2.4",
+    title="GFA Editor v1.2.5",
     description="A local Bandage-style GFA graph editor.",
-    version="1.2.4",
+    version="1.2.5",
 )
 
 app.add_middleware(
@@ -1476,7 +1900,7 @@ async def bind_editor_session(request: Request, call_next):
 
 @app.get("/api/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok", "version": "1.2.4", "instance_id": INSTANCE_ID}
+    return {"status": "ok", "version": "1.2.5", "instance_id": INSTANCE_ID}
 
 
 @app.post("/api/upload")
@@ -1485,6 +1909,7 @@ async def upload_gfa(
     keep_sequences: bool = Form(False),
     auto_split: bool = Form(True),
     max_elements_per_view: int = Form(DEFAULT_SPLIT_MAX_ELEMENTS),
+    remaining_chunk_size: int = Form(DEFAULT_REMAINING_CHUNK_SIZE),
 ) -> Dict[str, Any]:
     source_name = file.filename or "uploaded.gfa"
     try:
@@ -1507,6 +1932,7 @@ async def upload_gfa(
         sequence_load_seconds=loaded.sequence_load_seconds,
         auto_split=auto_split,
         max_elements_per_view=max_elements_per_view,
+        remaining_chunk_size=remaining_chunk_size,
     )
 
 
@@ -1564,6 +1990,7 @@ def load_server_file(payload: ServerFileRequest) -> Dict[str, Any]:
         sequence_load_seconds=loaded.sequence_load_seconds,
         auto_split=payload.auto_split,
         max_elements_per_view=payload.max_elements_per_view,
+        remaining_chunk_size=payload.remaining_chunk_size,
     )
 
 
@@ -1618,6 +2045,7 @@ def sftp_download(payload: SftpTransferRequest) -> Dict[str, Any]:
         sequence_load_seconds=loaded.sequence_load_seconds,
         auto_split=payload.auto_split,
         max_elements_per_view=payload.max_elements_per_view,
+        remaining_chunk_size=payload.remaining_chunk_size,
     )
 
 
@@ -1778,6 +2206,22 @@ def api_repeat_resolution(payload: RepeatResolutionRequest) -> Dict[str, Any]:
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auto_repeat_resolution_candidates")
+def api_auto_repeat_resolution_candidates() -> Dict[str, Any]:
+    try:
+        return session.generate_auto_repeat_resolution_candidates()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/apply_auto_repeat_resolution")
+def api_apply_auto_repeat_resolution(payload: AutoRepeatResolutionApplyRequest) -> Dict[str, Any]:
+    try:
+        return session.apply_auto_repeat_resolution_candidate(payload.candidate_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -205,7 +205,7 @@ def run_embedded_webview(url: str, server) -> None:
 
     api = DesktopApi()
     window = webview.create_window(
-        "GFA Editor v1.2.4",
+        "GFA Editor v1.2.5",
         url,
         width=1440,
         height=920,
