@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 import webbrowser
@@ -59,6 +59,24 @@ def prepend_import_roots(root: Path) -> None:
             path_text = str(path)
             if path_text not in sys.path:
                 sys.path.insert(0, path_text)
+
+
+def cli_args_from_app_argv(argv: List[str]) -> List[str]:
+    return [arg for arg in argv if not arg.startswith("-psn_")]
+
+
+def should_run_cli(argv: List[str]) -> bool:
+    return bool(cli_args_from_app_argv(argv))
+
+
+def run_cli(argv: List[str], root: Path) -> int:
+    prepend_import_roots(root)
+    os.environ["GFA_EDITOR_ROOT"] = str(root)
+    os.environ["GFA_EDITOR_FRONTEND_DIR"] = str(root / "frontend")
+    prepend_bundled_tools(root)
+    from backend.cli import main as cli_main
+
+    return cli_main(cli_args_from_app_argv(argv))
 
 
 def find_available_port(preferred: int = 8000) -> int:
@@ -205,7 +223,7 @@ def run_embedded_webview(url: str, server) -> None:
 
     api = DesktopApi()
     window = webview.create_window(
-        "GFA Editor v1.2.7",
+        "GFA Editor v1.2.8",
         url,
         width=1440,
         height=920,
@@ -258,6 +276,9 @@ def write_failure_log(exc: BaseException) -> None:
 
 def main() -> int:
     root = runtime_root()
+    if should_run_cli(sys.argv[1:]):
+        return run_cli(sys.argv[1:], root)
+
     os.chdir(root)
     prepend_import_roots(root)
     os.environ["GFA_EDITOR_ROOT"] = str(root)

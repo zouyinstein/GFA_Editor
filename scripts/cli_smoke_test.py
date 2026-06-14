@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -66,6 +67,15 @@ def main_test() -> None:
         )
 
         run_cli(["stats", str(gfa_path)])
+        desktop_cli = subprocess.run(
+            [sys.executable, str(ROOT_DIR / "desktop_app.py"), "stats", str(gfa_path)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert desktop_cli.returncode == 0, desktop_cli.stderr or desktop_cli.stdout
+        assert "nodes: 2" in desktop_cli.stdout
         run_cli(["merge", str(gfa_path), str(merged_path), "--all"])
         merged_graph = parse_gfa_text(merged_path.read_text(encoding="utf-8"), keep_sequences=True)
         assert len(merged_graph.segments) == 1
