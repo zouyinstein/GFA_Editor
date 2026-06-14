@@ -12,3 +12,4 @@ server_data/
 uvicorn.log
 packaging/bin/*/
 !packaging/bin/README.md
+thoughts.md
