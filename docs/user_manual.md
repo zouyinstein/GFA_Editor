@@ -1,6 +1,6 @@
-# GFA Editor v1.2.6 User Manual
+# GFA Editor v1.2.7 User Manual
 
-This manual describes the main tools and workflows in GFA Editor v1.2.6. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
+This manual describes the main tools and workflows in GFA Editor v1.2.7. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
 
 ## 1. Start, Stop, and Data Safety
 
@@ -96,7 +96,7 @@ By default, GFA Editor only reads and writes data on your local machine. It inte
 
 ## 2. Interface Layout
 
-The top bar shows the app icon, `GFA Editor v1.2.6`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
+The top bar shows the app icon, `GFA Editor v1.2.7`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
 
 The left panel contains Stats, Import, Labels, and Alignments.
 
@@ -239,7 +239,54 @@ In the macOS standalone app, export uses the system file picker so you can choos
 
 SVG and PDF export preserve visible labels, colors, and alignment foreground hit segments from the current Cose, Band, or Twin view. Exported SVG paths include explicit no-fill and stroke attributes for better compatibility with vector editors such as Affinity Designer and system preview tools.
 
-## 10. Desktop and Standalone Builds
+## 10. Command Line
+
+The CLI exposes common GFA Editor operations for scripted runs:
+
+```bash
+scripts/gfa_editor_cli.py --help
+```
+
+Draw a graph image:
+
+```bash
+scripts/gfa_editor_cli.py image graph.gfa graph.png --colour blastsolid --query multi_fasta.fa
+```
+
+Image output supports `.png`, `.svg`, and `.pdf`. Query colouring uses `blastn` or `minimap2` when available and falls back to exact sequence matching if neither tool is installed.
+
+Resolve eligible 2-in/2-out repeat nodes and merge the resolved circular graph:
+
+```bash
+scripts/gfa_editor_cli.py auto-repeat graph.gfa graph.resolved.gfa --candidate 1
+scripts/gfa_editor_cli.py merge graph.resolved.gfa graph.merged.gfa --all
+```
+
+Use `--candidate 0` to export every auto-repeat candidate:
+
+```bash
+scripts/gfa_editor_cli.py auto-repeat graph.gfa graph.resolved.gfa --candidate 0
+```
+
+This writes files such as `graph.resolved.auto_repeat_001.gfa`, `graph.resolved.auto_repeat_002.gfa`, and later candidates. Candidate numbers are deterministic for the same input and are ordered by the head-to-tail continuous sequence features of the candidate after merging.
+
+Run both steps in one command:
+
+```bash
+scripts/gfa_editor_cli.py auto-merge graph.gfa graph.merged.gfa --resolved-output graph.resolved.gfa
+```
+
+For another sample with multiple candidate resolutions, choose the candidate whose merged sequence is most continuously similar to a reference merged graph:
+
+```bash
+scripts/gfa_editor_cli.py auto-merge graph2.gfa graph2.merged.gfa --reference-merged graph.merged.gfa --resolved-output graph2.resolved.gfa
+```
+
+The selector compares each candidate after merge, prefers exact circular sequence matches, and otherwise scores long continuous collinear k-mer chains. Passing `--candidate N` still forces that candidate explicitly.
+
+Other CLI commands mirror common toolbar actions, including `stats`, `export`, `delete`, `duplicate`, `repeat`, `rotate`, `update-node`, and `update-edge`.
+
+## 11. Desktop and Standalone Builds
 
 Build the macOS app:
 
@@ -282,7 +329,7 @@ python scripts/generate_app_icons.py
 
 The script generates the frontend PNG, macOS `.icns`, Windows `.ico`, and iconset PNG files.
 
-## 11. Troubleshooting
+## 12. Troubleshooting
 
 If the port is already in use, first try:
 

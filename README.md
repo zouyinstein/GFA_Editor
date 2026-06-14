@@ -2,7 +2,7 @@
   <img src="frontend/app-icon.png" alt="GFA Editor app icon" width="96">
 </p>
 
-# GFA Editor v1.2.6
+# GFA Editor v1.2.7
 
 GFA Editor is a local Bandage-style viewer and editor for GFA assembly graphs. It provides Cose, Band, and Twin visualization modes, graph editing, alignment visualization, local/server file management, and GFA, FASTA, SVG, and PDF export.
 
@@ -32,6 +32,56 @@ Stop the service:
 
 ```bash
 scripts/stop_local.sh
+```
+
+## Command Line
+
+GFA Editor also ships a CLI wrapper for the core viewer/editor operations:
+
+```bash
+scripts/gfa_editor_cli.py --help
+```
+
+Draw a graph image. The output extension can be `.png`, `.svg`, or `.pdf`.
+`--colour blastsolid --query` follows the Bandage-style query-colour workflow:
+
+```bash
+scripts/gfa_editor_cli.py image graph.gfa graph.png --colour blastsolid --query multi_fasta.fa
+```
+
+If `blastn` or `minimap2` is on `PATH`, the CLI uses it for query alignment. If neither is available, it falls back to exact sequence matching.
+
+Automatically resolve eligible 2-in/2-out repeat nodes, then merge the resolved circular graph:
+
+```bash
+scripts/gfa_editor_cli.py auto-repeat graph.gfa graph.resolved.gfa --candidate 1
+scripts/gfa_editor_cli.py merge graph.resolved.gfa graph.merged.gfa --all
+```
+
+Use `--candidate 0` to write every auto-repeat candidate. Output files are named from the requested path, for example `graph.resolved.auto_repeat_001.gfa`, `graph.resolved.auto_repeat_002.gfa`, and so on. Candidate numbers are assigned deterministically from the head-to-tail continuous sequence features after each candidate is merged, so rerunning the same input keeps the same candidate number for the same merged arrangement.
+
+The same workflow can be run as one command:
+
+```bash
+scripts/gfa_editor_cli.py auto-merge graph.gfa graph.merged.gfa --resolved-output graph.resolved.gfa
+```
+
+For a second sample with multiple possible resolutions, choose the candidate whose merged sequence is most continuously similar to an existing reference merged graph:
+
+```bash
+scripts/gfa_editor_cli.py auto-merge graph2.gfa graph2.merged.gfa --reference-merged graph.merged.gfa --resolved-output graph2.resolved.gfa
+```
+
+The reference selector first merges each candidate, then scores exact circular sequence matches and long continuous collinear k-mer chains against the reference merged sequence. A manually supplied `--candidate` overrides this automatic reference selection.
+
+Other scripted operations mirror common toolbar actions:
+
+```bash
+scripts/gfa_editor_cli.py stats graph.gfa
+scripts/gfa_editor_cli.py export graph.gfa graph.fa --format fasta
+scripts/gfa_editor_cli.py duplicate graph.gfa duplicated.gfa utg12
+scripts/gfa_editor_cli.py repeat duplicated.gfa resolved.gfa utg12 utg12_copy1 --strategy A
+scripts/gfa_editor_cli.py update-node graph.gfa labeled.gfa utg12 --label repeat --color '#2f6faf'
 ```
 
 ## Linux Server Access

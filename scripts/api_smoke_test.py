@@ -11,6 +11,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from fastapi.testclient import TestClient
 
+from backend.gfa_core import parse_gfa_text
 from backend.main import app
 
 
@@ -37,8 +38,9 @@ def main() -> None:
 
     first_node = payload["nodes"][0]["data"]["id"]
     response = client.get("/api/export?format=fasta")
-    assert response.status_code == 409
-    print("fasta_without_sequences status=409")
+    response.raise_for_status()
+    assert response.text.startswith(">")
+    print("fasta_from_light_mode_cache status=200")
 
     blast_text = (
         f"{first_node}\tref_mito_chr\t99.2\t1200\t4\t0\t1\t1200\t30\t1229\t1e-180\t850\n"
@@ -140,9 +142,15 @@ def main() -> None:
                 "history_file": ("history.json", json.dumps(edit_history), "application/json"),
             },
             data={"keep_sequences": "false"},
-        )
+    )
     response.raise_for_status()
-    assert response.text == exported
+    rendered = response.text
+    rendered_graph = parse_gfa_text(rendered, keep_sequences=False)
+    exported_graph = parse_gfa_text(exported, keep_sequences=False)
+    assert rendered_graph.stats()["node_count"] == exported_graph.stats()["node_count"]
+    assert rendered_graph.stats()["edge_count"] == exported_graph.stats()["edge_count"]
+    assert "CL:Z:#33aa77" in rendered
+    assert "LB:Z:edited contig" in rendered
     print(f"render_history bytes={len(response.text.encode('utf-8'))}")
 
     response = client.post("/api/jump_edit_step", json={"target_step_count": 1})
