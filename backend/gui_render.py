@@ -240,6 +240,9 @@ def evaluate_export_js(
           if (dom.colorMode) dom.colorMode.value = {color_mode!r};
           if (dom.alignmentShowBackground) dom.alignmentShowBackground.checked = true;
           renderGraph(alignedPayload, {{ relayout: false }});
+          if ({str(color_mode in {"alignment", "read_path"}).lower()} && typeof showAlignmentVisualMode === 'function') {{
+            showAlignmentVisualMode();
+          }}
           await new Promise((resolve) => setTimeout(resolve, 80));
         }}
         const svgText = buildGraphSvgExport({{ selectedOnly: false }});
