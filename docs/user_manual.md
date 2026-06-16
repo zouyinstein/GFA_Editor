@@ -1,6 +1,6 @@
-# GFA Editor v1.2.9 User Manual
+# GFA Editor v1.3.0 User Manual
 
-This manual describes the main tools and workflows in GFA Editor v1.2.9. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
+This manual describes the main tools and workflows in GFA Editor v1.3.0. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
 
 ## 1. Start, Stop, and Data Safety
 
@@ -96,7 +96,7 @@ By default, GFA Editor only reads and writes data on your local machine. It inte
 
 ## 2. Interface Layout
 
-The top bar shows the app icon, `GFA Editor v1.2.9`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
+The top bar shows the app icon, `GFA Editor v1.3.0`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
 
 The left panel contains Stats, Import, Labels, and Alignments.
 
@@ -250,10 +250,10 @@ scripts/gfa_editor_cli.py --help
 Draw a graph image:
 
 ```bash
-scripts/gfa_editor_cli.py image graph.gfa graph.png --colour blastsolid --query multi_fasta.fa
+scripts/gfa_editor_cli.py image graph.gfa graph.pdf --colour blastsolid --query multi_fasta.fa --alignment-tool minimap2 --alignment-args "-x asm5 -c --secondary=yes"
 ```
 
-Image output supports `.png`, `.svg`, and `.pdf`. Query colouring uses `blastn` or `minimap2` when available and falls back to exact sequence matching if neither tool is installed.
+Image output supports `.png`, `.svg`, and `.pdf`. For `.svg` and `.pdf` Bandage output, the CLI uses the same GUI exporter, including minimap2/BLAST alignment colouring and light hit backgrounds. Query colouring uses `blastn` or `minimap2` when available and falls back to exact sequence matching if neither tool is installed; PNG output and `--alignment-tool exact` use the lightweight CLI renderer.
 
 Resolve eligible 2-in/2-out repeat nodes and merge the resolved circular graph:
 
@@ -299,6 +299,7 @@ The macOS standalone app exposes the same CLI through its bundle executable:
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --candidate 0
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-merge graph.gfa graph.merged.gfa --candidate 2 --resolved-output graph.resolved.gfa
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --reference-fasta reference.fa
+/Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor image graph.gfa graph.pdf --colour blastsolid --query multi_fasta.fa --alignment-tool minimap2 --alignment-args "-x asm5 -c --secondary=yes"
 ```
 
 Running the app without command-line arguments still opens the desktop GUI.

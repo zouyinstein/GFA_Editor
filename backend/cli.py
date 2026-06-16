@@ -17,6 +17,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .cli_render import normalize_colour, render_graph
 from .edit_history import build_history_document
+from .gui_render import GuiRenderUnavailable, render_with_gui_export
 from .gfa_core import (
     GfaGraph,
     attach_blast_hits,
@@ -91,9 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
     image.add_argument("--alignment-tool", choices=["auto", "blastn", "minimap2", "exact"], default="auto")
     image.add_argument("--alignment-args", default="", help="Extra args for blastn/minimap2")
     image.add_argument("--target-role", choices=["subject", "query"], default="subject")
-    image.add_argument("--layout", choices=["auto", "spring", "circle", "grid"], default="auto")
-    image.add_argument("--width", type=int, default=1400)
-    image.add_argument("--height", type=int, default=1000)
+    image.add_argument("--layout", choices=["auto", "bandage", "bandage_native", "spring", "circle", "grid"], default="bandage")
+    image.add_argument("--width", type=int, default=0, help="Output width in px/pt; defaults to GUI-style content bounds for bandage layout")
+    image.add_argument("--height", type=int, default=0, help="Output height in px/pt; defaults to GUI-style content bounds for bandage layout")
     image.add_argument("--no-labels", action="store_true")
     image.set_defaults(func=cmd_image)
 
@@ -234,6 +235,24 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 def cmd_image(args: argparse.Namespace) -> int:
     colour = normalize_colour(args.colour)
+    if should_use_gui_export(args):
+        try:
+            render_with_gui_export(
+                args.input,
+                args.output,
+                colour=colour,
+                show_labels=not args.no_labels,
+                query_path=args.query,
+                alignment_path=args.alignment,
+                alignment_format=args.alignment_format,
+                alignment_tool=args.alignment_tool,
+                alignment_args=args.alignment_args,
+                target_role=args.target_role,
+            )
+            print(f"wrote {args.output}")
+            return 0
+        except GuiRenderUnavailable as exc:
+            print(f"warning: GUI export unavailable ({exc}); falling back to CLI renderer", file=sys.stderr)
     keep_sequences = bool(args.query)
     graph = read_graph(args.input, keep_sequences=keep_sequences)
     alignment_summary = None
@@ -264,6 +283,22 @@ def cmd_image(args: argparse.Namespace) -> int:
     )
     print(f"wrote {args.output}")
     return 0
+
+
+def should_use_gui_export(args: argparse.Namespace) -> bool:
+    layout = str(getattr(args, "layout", "") or "").strip().lower().replace("-", "_")
+    if layout not in {"auto", "bandage", "bandage_native", "band"}:
+        return False
+    query = getattr(args, "query", None)
+    alignment = getattr(args, "alignment", None)
+    alignment_tool = str(getattr(args, "alignment_tool", "") or "").strip().lower()
+    if query and alignment_tool == "exact":
+        return False
+    if int(getattr(args, "width", 0) or 0) > 0 or int(getattr(args, "height", 0) or 0) > 0:
+        return False
+    if Path(args.output).suffix.lower() not in {".pdf", ".svg"}:
+        return False
+    return True
 
 
 def cmd_auto_repeat(args: argparse.Namespace) -> int:

@@ -1,4 +1,4 @@
-# GFA Editor 1.2.9 Implementation Notes
+# GFA Editor 1.3.0 Implementation Notes
 
 This file records the public engineering notes for the CLI repeat-resolution work. It is a concise design and verification summary, not a private chain-of-thought transcript.
 
@@ -37,3 +37,12 @@ This file records the public engineering notes for the CLI repeat-resolution wor
 - Running `GFA_Editor.app/Contents/MacOS/GFA_Editor` with CLI arguments forwards those arguments to `backend.cli.main`.
 - Running the app without CLI arguments, or with only the Finder `-psn_...` launch argument, still opens the desktop GUI.
 - CLI mode preserves the caller's current working directory so relative input and output paths behave like `scripts/gfa_editor_cli.py`.
+
+## 1.3.0 GUI-Matched CLI Alignment Export
+
+- CLI `.pdf` and `.svg` Bandage image export now uses a hidden GUI renderer instead of the lightweight Python renderer when possible.
+- `image --colour blastsolid --query` stages the GFA in a temporary GUI session, runs the same `/api/run_alignment` flow used by the app, and exports through `buildGraphSvgExport` / `buildPdfFromSvg`.
+- Query FASTA input is passed to the browser session as an in-memory `File`, so the frontend keeps the same session state, alignment spans, query colours, and light hit background behavior as the interactive GUI.
+- Precomputed `--alignment` files are imported through the same GUI upload alignment endpoint before export.
+- PNG output and `--alignment-tool exact` still use the lightweight CLI renderer; this keeps exact-match fallback available where GUI minimap2/BLAST execution is not appropriate.
+- The tested mito graph exported without grid background and with GUI-style Bandage alignment colouring: unhit contigs use the light alignment background and hit spans use the frontend query palette.

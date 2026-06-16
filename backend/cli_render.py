@@ -10,7 +10,7 @@ import struct
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from .gfa_core import GfaGraph, best_blast_hit
 from .graph_ops import graph_is_circular_subgraph, valid_graph_links
@@ -21,7 +21,7 @@ Color = Tuple[int, int, int]
 BACKGROUND = (251, 252, 248)
 INK = (31, 37, 33)
 MUTED = (112, 122, 108)
-EDGE = (116, 126, 112)
+EDGE = (155, 167, 151)
 UNHIT = (219, 225, 212)
 PALETTE: List[Color] = [
     (47, 111, 175),
@@ -45,6 +45,7 @@ class RenderNode:
     length_px: float
     width_px: float
     color: Color
+    points: Optional[List[Tuple[float, float]]] = None
 
 
 @dataclass
@@ -73,15 +74,20 @@ def render_graph(
     *,
     width: int = 1400,
     height: int = 1000,
-    layout: str = "auto",
+    layout: str = "bandage",
     colour: str = "depth",
     show_labels: bool = True,
     title: str = "GFA graph",
 ) -> None:
+    render_width = int(width)
+    render_height = int(height)
+    if not is_bandage_layout(layout) or (render_width > 0 and render_height > 0):
+        render_width = max(320, render_width)
+        render_height = max(240, render_height)
     scene = build_scene(
         graph,
-        width=max(320, int(width)),
-        height=max(240, int(height)),
+        width=render_width,
+        height=render_height,
         layout=layout,
         colour=colour,
         show_labels=show_labels,
@@ -111,6 +117,16 @@ def build_scene(
     show_labels: bool,
     title: str,
 ) -> RenderScene:
+    if is_bandage_layout(layout):
+        return build_bandage_scene(
+            graph,
+            width=width,
+            height=height,
+            colour=colour,
+            show_labels=show_labels,
+            title=title,
+        )
+
     positions = layout_positions(graph, width, height, layout)
     max_length = max((segment.length for segment in graph.segments.values()), default=1)
     max_support = max((link.support or 0 for link in graph.links), default=1) or 1
@@ -172,6 +188,542 @@ def layout_positions(graph: GfaGraph, width: int, height: int, layout: str) -> D
     if normalized not in {"spring", "force"}:
         raise ValueError("Layout must be auto, spring, circle, or grid")
     return spring_positions(graph, width, height)
+
+
+def is_bandage_layout(layout: str) -> bool:
+    normalized = (layout or "bandage").strip().lower().replace("-", "_")
+    return normalized in {"auto", "band", "bandage", "bandage_native"}
+
+
+def build_bandage_scene(
+    graph: GfaGraph,
+    *,
+    width: int,
+    height: int,
+    colour: str,
+    show_labels: bool,
+    title: str,
+) -> RenderScene:
+    states = bandage_endpoint_layout(graph)
+    raw_nodes: List[RenderNode] = []
+    raw_edges: List[RenderEdge] = []
+    contig_width = 18.0
+    links = valid_graph_links(graph)
+    max_support = max((link.support or 0 for link in links), default=1) or 1
+
+    for node_id, segment in graph.segments.items():
+        points = states.get(node_id)
+        if not points:
+            continue
+        center = average_point(points)
+        start = points[0]
+        end = points[-1]
+        angle = math.atan2(end[1] - start[1], end[0] - start[0])
+        length_px = polyline_length(points)
+        raw_nodes.append(
+            RenderNode(
+                id=node_id,
+                label=node_id if show_labels else "",
+                x=center[0],
+                y=center[1],
+                angle=angle,
+                length_px=length_px,
+                width_px=contig_width,
+                color=node_colour(graph, node_id, colour),
+                points=points,
+            )
+        )
+
+    for index, link in enumerate(links):
+        source_points = states.get(link.source)
+        target_points = states.get(link.target)
+        if not source_points or not target_points:
+            continue
+        source = bandage_endpoint(source_points, link.source_orient, "source")
+        target = bandage_endpoint(target_points, link.target_orient, "target")
+        points = bandage_link_points(source, target, link.id, index)
+        color = edge_colour(link, colour)
+        width_px = max(2.3, (1.5 + min(5.0, 5.0 * ((link.support or 0) / max_support))) * 0.78)
+        label = "" if not show_labels else (str(int(link.support)) if link.support else "")
+        raw_edges.append(
+            RenderEdge(
+                source=link.source,
+                target=link.target,
+                label=label,
+                points=points,
+                color=color,
+                width_px=width_px,
+            )
+        )
+
+    if raw_nodes or raw_edges:
+        if width <= 0 or height <= 0:
+            width, height = frame_bandage_scene_auto(raw_nodes, raw_edges)
+        else:
+            fit_bandage_scene(raw_nodes, raw_edges, width, height)
+
+    return RenderScene(width=width, height=height, nodes=raw_nodes, edges=raw_edges, title=title)
+
+
+def bandage_endpoint_layout(graph: GfaGraph) -> Dict[str, List[Tuple[float, float]]]:
+    node_ids = list(graph.segments)
+    if not node_ids:
+        return {}
+    glyph_lengths = bandage_glyph_lengths(graph)
+    cycle = longest_simple_cycle(graph)
+    centered = cycle_seed_centers(graph, cycle, glyph_lengths) if len(cycle) >= 4 else {}
+    if not centered:
+        centers = spring_positions(graph, 1200, 1000)
+        centered = {
+            node_id: (point[0] - 600.0, point[1] - 500.0)
+            for node_id, point in centers.items()
+        }
+    endpoint_points: Dict[str, Dict[str, List[float]]] = {}
+    for index, node_id in enumerate(node_ids):
+        center = centered.get(node_id) or fallback_bandage_center(index, len(node_ids))
+        angle = estimate_bandage_angle(graph, node_id, centered, index)
+        half = glyph_lengths.get(node_id, 80.0) / 2.0
+        direction = (math.cos(angle), math.sin(angle))
+        endpoint_points[f"{node_id}:-"] = [center[0] - direction[0] * half, center[1] - direction[1] * half]
+        endpoint_points[f"{node_id}:+"] = [center[0] + direction[0] * half, center[1] + direction[1] * half]
+    anchors = {key: [point[0], point[1]] for key, point in endpoint_points.items()}
+
+    springs: List[Tuple[str, str, float, float]] = []
+    for node_id in node_ids:
+        springs.append((f"{node_id}:-", f"{node_id}:+", glyph_lengths.get(node_id, 80.0), 0.16))
+    for link in valid_graph_links(graph):
+        source_key = f"{link.source}:{gfa_endpoint_side(link.source_orient, 'source')}"
+        target_key = f"{link.target}:{gfa_endpoint_side(link.target_orient, 'target')}"
+        if source_key in endpoint_points and target_key in endpoint_points:
+            springs.append((source_key, target_key, 34.0, 0.34))
+
+    keys = list(endpoint_points)
+    for step in range(520):
+        alpha = 1.0 - step / 520.0
+        cooling = 0.25 + alpha * 0.75
+        displacements = {key: [0.0, 0.0] for key in keys}
+        for source_key, target_key, desired, strength in springs:
+            source = endpoint_points[source_key]
+            target = endpoint_points[target_key]
+            dx = target[0] - source[0]
+            dy = target[1] - source[1]
+            distance = max(math.hypot(dx, dy), 0.001)
+            force = (distance - desired) * strength * cooling
+            fx = dx / distance * force
+            fy = dy / distance * force
+            displacements[source_key][0] += fx
+            displacements[source_key][1] += fy
+            displacements[target_key][0] -= fx
+            displacements[target_key][1] -= fy
+
+        for first_index, first_key in enumerate(keys):
+            first = endpoint_points[first_key]
+            first_node = first_key.rsplit(":", 1)[0]
+            for second_key in keys[first_index + 1 :]:
+                second_node = second_key.rsplit(":", 1)[0]
+                if first_node == second_node:
+                    continue
+                second = endpoint_points[second_key]
+                dx = first[0] - second[0]
+                dy = first[1] - second[1]
+                distance = math.hypot(dx, dy)
+                if distance < 0.001:
+                    angle = math.tau * hash_number(f"{first_key}:{second_key}:repel")
+                    dx = math.cos(angle)
+                    dy = math.sin(angle)
+                    distance = 1.0
+                charge_distance = 270.0
+                collision_distance = 34.0
+                if distance >= charge_distance and distance >= collision_distance:
+                    continue
+                force = 0.0
+                if distance < collision_distance:
+                    force += (collision_distance - distance) * 0.34
+                if distance < charge_distance:
+                    force += (4200.0 / max(distance * distance, 36.0)) * ((1.0 - distance / charge_distance) ** 1.55)
+                force *= cooling
+                fx = dx / distance * force
+                fy = dy / distance * force
+                displacements[first_key][0] += fx
+                displacements[first_key][1] += fy
+                displacements[second_key][0] -= fx
+                displacements[second_key][1] -= fy
+
+        for key, point in endpoint_points.items():
+            dx, dy = displacements[key]
+            anchor = anchors[key]
+            dx += (anchor[0] - point[0]) * 0.025
+            dy += (anchor[1] - point[1]) * 0.025
+            point[0] += clamp(dx - point[0] * 0.00035, -22.0, 22.0)
+            point[1] += clamp(dy - point[1] * 0.00035, -22.0, 22.0)
+
+        if step % 12 == 0:
+            constrain_bandage_internal_lengths(endpoint_points, glyph_lengths, strength=0.42)
+
+    constrain_bandage_internal_lengths(endpoint_points, glyph_lengths, strength=0.75)
+    states: Dict[str, List[Tuple[float, float]]] = {}
+    for node_id in node_ids:
+        start = tuple(endpoint_points[f"{node_id}:-"])
+        end = tuple(endpoint_points[f"{node_id}:+"])
+        bend = deterministic_signed_value(node_id) * 1.9
+        states[node_id] = create_native_polyline_points(start, end, bend, node_id, glyph_lengths.get(node_id, 80.0))
+    return states
+
+
+def longest_simple_cycle(graph: GfaGraph) -> List[str]:
+    node_ids = list(graph.segments)
+    if len(node_ids) > 42:
+        return []
+    adjacency: Dict[str, List[str]] = {node_id: [] for node_id in node_ids}
+    for link in valid_graph_links(graph):
+        if link.source in adjacency and link.target in adjacency:
+            adjacency[link.source].append(link.target)
+            adjacency[link.target].append(link.source)
+    cycles: Set[Tuple[str, ...]] = set()
+    max_cycles = 8000
+
+    def canonical(path: List[str]) -> Tuple[str, ...]:
+        variants: List[Tuple[str, ...]] = []
+        for sequence in (path, list(reversed(path))):
+            for index in range(len(sequence)):
+                variants.append(tuple(sequence[index:] + sequence[:index]))
+        return min(variants)
+
+    def dfs(start: str, current: str, path: List[str], used: Set[str]) -> None:
+        if len(cycles) >= max_cycles:
+            return
+        for neighbor in adjacency.get(current, []):
+            if neighbor == start and len(path) >= 3:
+                cycles.add(canonical(path.copy()))
+            elif neighbor not in used and len(path) < len(node_ids):
+                used.add(neighbor)
+                path.append(neighbor)
+                dfs(start, neighbor, path, used)
+                path.pop()
+                used.remove(neighbor)
+
+    for node_id in node_ids:
+        dfs(node_id, node_id, [node_id], {node_id})
+        if len(cycles) >= max_cycles:
+            break
+    if not cycles:
+        return []
+    selected = list(
+        max(
+            cycles,
+            key=lambda cycle: (
+                len(cycle),
+                sum(graph.segments[node_id].length for node_id in cycle if node_id in graph.segments),
+            ),
+        )
+    )
+    if len(selected) > 2:
+        return [selected[0], *reversed(selected[1:])]
+    return selected
+
+
+def cycle_seed_centers(
+    graph: GfaGraph,
+    cycle: List[str],
+    glyph_lengths: Dict[str, float],
+) -> Dict[str, Tuple[float, float]]:
+    if len(cycle) < 4:
+        return {}
+    weights = [math.sqrt(max(glyph_lengths.get(node_id, 40.0), 34.0)) for node_id in cycle]
+    total = sum(weights) or 1.0
+    radius_x = max(280.0, min(380.0, total / math.tau * 0.82))
+    radius_y = max(430.0, min(560.0, total / math.tau * 1.25))
+    start_angle = -0.42
+    centers: Dict[str, Tuple[float, float]] = {}
+    cursor = 0.0
+    for node_id, weight in zip(cycle, weights):
+        theta = start_angle + math.tau * (cursor + weight / 2.0) / total
+        centers[node_id] = (math.cos(theta) * radius_x, math.sin(theta) * radius_y)
+        cursor += weight
+
+    cycle_set = set(cycle)
+    unresolved = [node_id for node_id in graph.segments if node_id not in cycle_set]
+    for _ in range(len(unresolved) + 2):
+        changed = False
+        for node_id in list(unresolved):
+            neighbors = [
+                other
+                for other in graph_neighbors(graph, node_id)
+                if other in centers
+            ]
+            if not neighbors:
+                continue
+            average = (
+                sum(centers[other][0] for other in neighbors) / len(neighbors),
+                sum(centers[other][1] for other in neighbors) / len(neighbors),
+            )
+            inward = 0.58 if len(neighbors) >= 2 else 0.82
+            angle = math.tau * hash_number(f"{node_id}:branch-offset")
+            jitter = 34.0 + 22.0 * hash_number(f"{node_id}:branch-radius")
+            centers[node_id] = (
+                average[0] * inward + math.cos(angle) * jitter,
+                average[1] * inward + math.sin(angle) * jitter,
+            )
+            unresolved.remove(node_id)
+            changed = True
+        if not changed:
+            break
+    for index, node_id in enumerate(unresolved):
+        centers[node_id] = fallback_bandage_center(index, len(graph.segments))
+    return centers
+
+
+def graph_neighbors(graph: GfaGraph, node_id: str) -> List[str]:
+    neighbors: List[str] = []
+    for link in valid_graph_links(graph):
+        if link.source == node_id:
+            neighbors.append(link.target)
+        elif link.target == node_id:
+            neighbors.append(link.source)
+    return neighbors
+
+
+def bandage_glyph_lengths(graph: GfaGraph) -> Dict[str, float]:
+    node_count = max(len(graph.segments), 1)
+    max_glyph = 560.0 if node_count <= 70 else 420.0 if node_count <= 180 else 300.0
+    min_glyph = 30.0 if node_count <= 180 else 22.0
+    max_length = max((segment.length for segment in graph.segments.values()), default=1) or 1
+    pixels_per_bp = max_glyph / max_length
+    return {
+        node_id: max(min_glyph, segment.length * pixels_per_bp)
+        for node_id, segment in graph.segments.items()
+    }
+
+
+def fallback_bandage_center(index: int, count: int) -> Tuple[float, float]:
+    radius = 120.0 + math.sqrt(max(count, 1)) * 46.0
+    angle = math.tau * index / max(count, 1)
+    lane = 1.0 + (index % 4) * 0.18
+    return math.cos(angle) * radius * lane, math.sin(angle) * radius * lane
+
+
+def estimate_bandage_angle(
+    graph: GfaGraph,
+    node_id: str,
+    centers: Dict[str, Tuple[float, float]],
+    index: int,
+) -> float:
+    center = centers.get(node_id) or fallback_bandage_center(index, max(len(graph.segments), 1))
+    vx = 0.0
+    vy = 0.0
+    for link in valid_graph_links(graph):
+        attached_as_source = link.source == node_id
+        attached_as_target = link.target == node_id
+        if not attached_as_source and not attached_as_target:
+            continue
+        other_id = link.target if attached_as_source else link.source
+        other = centers.get(other_id)
+        if other is None:
+            continue
+        dx = other[0] - center[0]
+        dy = other[1] - center[1]
+        distance = max(math.hypot(dx, dy), 1.0)
+        side = gfa_endpoint_side(link.source_orient if attached_as_source else link.target_orient, "source" if attached_as_source else "target")
+        sign = -1.0 if side == "-" else 1.0
+        vx += dx / distance * sign
+        vy += dy / distance * sign
+    if math.hypot(vx, vy) > 0.08:
+        return math.atan2(vy, vx)
+    return math.tau * hash_number(f"{node_id}:{index}")
+
+
+def gfa_endpoint_side(orient: str, role: str) -> str:
+    if role == "target":
+        return "+" if orient == "-" else "-"
+    return "-" if orient == "-" else "+"
+
+
+def bandage_endpoint(points: List[Tuple[float, float]], orient: str, role: str) -> Tuple[float, float]:
+    return points[0] if gfa_endpoint_side(orient, role) == "-" else points[-1]
+
+
+def constrain_bandage_internal_lengths(
+    endpoint_points: Dict[str, List[float]],
+    glyph_lengths: Dict[str, float],
+    *,
+    strength: float,
+) -> None:
+    for node_id, desired in glyph_lengths.items():
+        start = endpoint_points.get(f"{node_id}:-")
+        end = endpoint_points.get(f"{node_id}:+")
+        if not start or not end:
+            continue
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        distance = max(math.hypot(dx, dy), 0.001)
+        correction = (distance - desired) * 0.5 * strength
+        cx = dx / distance * correction
+        cy = dy / distance * correction
+        start[0] += cx
+        start[1] += cy
+        end[0] -= cx
+        end[1] -= cy
+
+
+def create_native_polyline_points(
+    start: Tuple[float, float],
+    end: Tuple[float, float],
+    bend: float,
+    seed: str,
+    target_length: float,
+) -> List[Tuple[float, float]]:
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    chord = max(math.hypot(dx, dy), 1.0)
+    direction = (dx / chord, dy / chord)
+    normal = (-direction[1], direction[0])
+    segment_count = max(2, min(28, math.ceil(max(target_length, 1.0) / 44.0)))
+    desired_segment = max(target_length / segment_count, 1.0)
+    chord_step = chord / segment_count
+    target_angle = math.radians(148.0)
+    target_offset = chord_step / max(math.tan(target_angle / 2.0), 0.001)
+    folded_amplitude = math.sqrt(max(desired_segment * desired_segment - chord_step * chord_step, 0.0)) * 0.18
+    kink_direction = 1.0 if hash_number(f"{seed}:kink-side") > 0.5 else -1.0
+    kink_amplitude = max(4.0, min(34.0, max(target_offset, min(target_length * 0.08, folded_amplitude * 0.35))))
+    phase = math.pi if hash_number(f"{seed}:kink-phase") > 0.5 else 0.0
+    points: List[Tuple[float, float]] = []
+    for index in range(segment_count + 1):
+        t = index / segment_count
+        envelope = math.sin(math.pi * t)
+        arc_offset = bend * 0.16 * envelope
+        native_arc = 0.0 if index in {0, segment_count} else kink_direction * kink_amplitude * envelope
+        small_facet = math.sin(math.tau * t + phase) * kink_amplitude * 0.04 * envelope
+        offset = arc_offset + native_arc + small_facet
+        points.append(
+            (
+                start[0] + direction[0] * chord * t + normal[0] * offset,
+                start[1] + direction[1] * chord * t + normal[1] * offset,
+            )
+        )
+    return points
+
+
+def bandage_link_points(
+    source: Tuple[float, float],
+    target: Tuple[float, float],
+    edge_id: str,
+    index: int,
+) -> List[Tuple[float, float]]:
+    dx = target[0] - source[0]
+    dy = target[1] - source[1]
+    distance = max(math.hypot(dx, dy), 1.0)
+    normal = (-dy / distance, dx / distance)
+    bend_seed = hash_number(f"{edge_id}:bend")
+    bend = min(18.0, max(4.0, distance * 0.16 + bend_seed * 9.0))
+    bend *= 1.0 if hash_number(f"{edge_id}:side") > 0.5 else -1.0
+    bend += ((index % 3) - 1) * 10.0
+    control = (
+        (source[0] + target[0]) / 2.0 + normal[0] * bend,
+        (source[1] + target[1]) / 2.0 + normal[1] * bend,
+    )
+    return quadratic_points(source, control, target, steps=18)
+
+
+def fit_bandage_scene(nodes: List[RenderNode], edges: List[RenderEdge], width: int, height: int) -> None:
+    points: List[Tuple[float, float]] = []
+    for node in nodes:
+        points.extend(node_points(node))
+    for edge in edges:
+        points.extend(edge.points)
+    if not points:
+        return
+    min_x = min(point[0] for point in points)
+    max_x = max(point[0] for point in points)
+    min_y = min(point[1] for point in points)
+    max_y = max(point[1] for point in points)
+    padding = 70.0
+    scale = min(
+        (width - padding * 2) / max(max_x - min_x, 1.0),
+        (height - padding * 2) / max(max_y - min_y, 1.0),
+    )
+    scale = max(0.08, min(3.2, scale))
+    offset_x = width / 2.0 - ((min_x + max_x) / 2.0) * scale
+    offset_y = height / 2.0 - ((min_y + max_y) / 2.0) * scale
+
+    def transform(point: Tuple[float, float]) -> Tuple[float, float]:
+        return point[0] * scale + offset_x, point[1] * scale + offset_y
+
+    for node in nodes:
+        if node.points:
+            node.points = [transform(point) for point in node.points]
+            node.x, node.y = average_point(node.points)
+            start = node.points[0]
+            end = node.points[-1]
+            node.angle = math.atan2(end[1] - start[1], end[0] - start[0])
+            node.length_px = polyline_length(node.points)
+        else:
+            node.x, node.y = transform((node.x, node.y))
+            node.length_px *= scale
+        node.width_px = max(6.0, min(56.0, node.width_px))
+    for edge in edges:
+        edge.points = [transform(point) for point in edge.points]
+
+
+def frame_bandage_scene_auto(nodes: List[RenderNode], edges: List[RenderEdge]) -> Tuple[int, int]:
+    points: List[Tuple[float, float]] = []
+    for node in nodes:
+        points.extend(node_points(node))
+    for edge in edges:
+        points.extend(edge.points)
+    if not points:
+        return 320, 240
+    margin = 34.0
+    min_x = min(point[0] for point in points)
+    max_x = max(point[0] for point in points)
+    min_y = min(point[1] for point in points)
+    max_y = max(point[1] for point in points)
+    width = max(320, math.ceil(max_x - min_x + margin * 2))
+    height = max(240, math.ceil(max_y - min_y + margin * 2))
+    offset_x = margin - min_x
+    offset_y = margin - min_y
+
+    def transform(point: Tuple[float, float]) -> Tuple[float, float]:
+        return point[0] + offset_x, point[1] + offset_y
+
+    for node in nodes:
+        if node.points:
+            node.points = [transform(point) for point in node.points]
+            node.x, node.y = average_point(node.points)
+            start = node.points[0]
+            end = node.points[-1]
+            node.angle = math.atan2(end[1] - start[1], end[0] - start[0])
+            node.length_px = polyline_length(node.points)
+        else:
+            node.x, node.y = transform((node.x, node.y))
+    for edge in edges:
+        edge.points = [transform(point) for point in edge.points]
+    return width, height
+
+
+def average_point(points: List[Tuple[float, float]]) -> Tuple[float, float]:
+    if not points:
+        return 0.0, 0.0
+    return sum(point[0] for point in points) / len(points), sum(point[1] for point in points) / len(points)
+
+
+def polyline_length(points: List[Tuple[float, float]]) -> float:
+    return sum(math.hypot(end[0] - start[0], end[1] - start[1]) for start, end in zip(points, points[1:]))
+
+
+def hash_number(value: str) -> float:
+    result = 2166136261
+    for char in value:
+        result ^= ord(char)
+        result = (result * 16777619) & 0xFFFFFFFF
+    return (result % 10000) / 10000.0
+
+
+def deterministic_signed_value(value: str) -> float:
+    return (hash_number(value) - 0.5) * 2.0
+
+
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def circle_positions(node_ids: List[str], width: int, height: int) -> Dict[str, Tuple[float, float]]:
@@ -497,27 +1049,32 @@ def scene_to_svg(scene: RenderScene) -> str:
     lines.append("</g>")
 
     for node in scene.nodes:
-        x1, y1, x2, y2 = node_axis(node)
+        points = node_points(node)
+        x1, y1 = points[0]
+        x2, y2 = points[-1]
+        node_path = points_to_svg_path(points)
         lines.append(
-            f'<line x1="{x1:.2f}" y1="{y1:.2f}" x2="{x2:.2f}" y2="{y2:.2f}" '
-            f'stroke="{css(node.color)}" stroke-width="{node.width_px:.2f}" stroke-linecap="round"/>'
+            f'<path d="{node_path}" fill="none" stroke="{css(node.color)}" '
+            f'stroke-width="{node.width_px:.2f}" stroke-linecap="round" stroke-linejoin="round"/>'
         )
         lines.append(
-            f'<circle cx="{x1:.2f}" cy="{y1:.2f}" r="{max(2.4, node.width_px * 0.23):.2f}" fill="#1f2521" opacity="0.72"/>'
+            f'<circle cx="{x1:.2f}" cy="{y1:.2f}" r="3.90" fill="#1f2521" opacity="0.85"/>'
         )
         lines.append(
-            f'<circle cx="{x2:.2f}" cy="{y2:.2f}" r="{max(2.4, node.width_px * 0.23):.2f}" fill="#1f2521" opacity="0.72"/>'
+            f'<circle cx="{x2:.2f}" cy="{y2:.2f}" r="3.90" fill="#1f2521" opacity="0.85"/>'
         )
         if node.label:
+            lines.append(svg_text("-", x1, y1 + 0.2, 7, (255, 255, 255), weight="700"))
+            lines.append(svg_text("+", x2, y2 + 0.2, 7, (255, 255, 255), weight="700"))
             lines.append(svg_text(node.label, node.x, node.y + node.width_px + 13, 10, INK))
     lines.append("</svg>")
     return "\n".join(lines) + "\n"
 
 
-def svg_text(text: str, x: float, y: float, size: int, color: Color) -> str:
+def svg_text(text: str, x: float, y: float, size: int, color: Color, *, weight: str = "400") -> str:
     return (
         f'<text x="{x:.2f}" y="{y:.2f}" fill="{css(color)}" font-size="{size}" '
-        'font-family="Inter,Arial,sans-serif" text-anchor="middle" dominant-baseline="central">'
+        f'font-weight="{weight}" font-family="Inter,Arial,sans-serif" text-anchor="middle" dominant-baseline="central">'
         f"{html.escape(text)}</text>"
     )
 
@@ -539,6 +1096,13 @@ def node_axis(node: RenderNode) -> Tuple[float, float, float, float]:
     dx = math.cos(node.angle) * node.length_px / 2
     dy = math.sin(node.angle) * node.length_px / 2
     return node.x - dx, node.y - dy, node.x + dx, node.y + dy
+
+
+def node_points(node: RenderNode) -> List[Tuple[float, float]]:
+    if node.points and len(node.points) >= 2:
+        return node.points
+    x1, y1, x2, y2 = node_axis(node)
+    return [(x1, y1), (x2, y2)]
 
 
 def arrow_polygon(points: List[Tuple[float, float]], size: float) -> List[Tuple[float, float]]:
@@ -573,12 +1137,16 @@ def scene_to_png(scene: RenderScene) -> bytes:
             x, y = edge.points[len(edge.points) // 2]
             canvas.text(edge.label, int(x), int(y - 13), MUTED, scale=1, centered=True)
     for node in scene.nodes:
-        x1, y1, x2, y2 = node_axis(node)
-        canvas.line(x1, y1, x2, y2, node.color, max(3, int(round(node.width_px))))
-        endpoint_radius = max(2, int(round(node.width_px * 0.25)))
+        points = node_points(node)
+        x1, y1 = points[0]
+        x2, y2 = points[-1]
+        canvas.polyline(points, node.color, max(3, int(round(node.width_px))))
+        endpoint_radius = 4
         canvas.circle(x1, y1, endpoint_radius, INK)
         canvas.circle(x2, y2, endpoint_radius, INK)
         if node.label:
+            canvas.text("-", int(x1), int(y1 - 3), (255, 255, 255), scale=1, centered=True)
+            canvas.text("+", int(x2), int(y2 - 3), (255, 255, 255), scale=1, centered=True)
             canvas.text(node.label, int(node.x), int(node.y + node.width_px + 14), INK, scale=1, centered=True)
     return canvas.to_png()
 
@@ -701,13 +1269,17 @@ def scene_to_pdf(scene: RenderScene) -> bytes:
             x, y = edge.points[len(edge.points) // 2]
             commands.append(pdf_text(edge.label, x, y - 10, 8, MUTED, scene.height))
     for node in scene.nodes:
-        x1, y1, x2, y2 = node_axis(node)
+        points = node_points(node)
+        x1, y1 = points[0]
+        x2, y2 = points[-1]
         commands.append(pdf_stroke(node.color, node.width_px))
-        commands.append(f"{x1:.2f} {scene.height - y1:.2f} m {x2:.2f} {scene.height - y2:.2f} l S")
-        endpoint_radius = max(2.4, node.width_px * 0.23)
+        commands.extend(pdf_polyline(points, scene.height))
+        endpoint_radius = 3.9
         commands.append(pdf_circle(x1, y1, endpoint_radius, INK, scene.height))
         commands.append(pdf_circle(x2, y2, endpoint_radius, INK, scene.height))
         if node.label:
+            commands.append(pdf_text("-", x1, y1 + 1.8, 7, (255, 255, 255), scene.height))
+            commands.append(pdf_text("+", x2, y2 + 1.8, 7, (255, 255, 255), scene.height))
             commands.append(pdf_text(node.label, node.x, node.y + node.width_px + 13, 8, INK, scene.height))
     return encode_pdf(scene.width, scene.height, "\n".join(commands) + "\n")
 

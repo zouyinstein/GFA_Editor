@@ -2,7 +2,7 @@
   <img src="frontend/app-icon.png" alt="GFA Editor app icon" width="96">
 </p>
 
-# GFA Editor v1.2.9
+# GFA Editor v1.3.0
 
 GFA Editor is a local Bandage-style viewer and editor for GFA assembly graphs. It provides Cose, Band, and Twin visualization modes, graph editing, alignment visualization, local/server file management, and GFA, FASTA, SVG, and PDF export.
 
@@ -43,13 +43,13 @@ scripts/gfa_editor_cli.py --help
 ```
 
 Draw a graph image. The output extension can be `.png`, `.svg`, or `.pdf`.
-`--colour blastsolid --query` follows the Bandage-style query-colour workflow:
+For `.svg` and `.pdf` Bandage output, the CLI uses the same GUI exporter, including minimap2/BLAST alignment colouring and light hit backgrounds:
 
 ```bash
-scripts/gfa_editor_cli.py image graph.gfa graph.png --colour blastsolid --query multi_fasta.fa
+scripts/gfa_editor_cli.py image graph.gfa graph.pdf --colour blastsolid --query multi_fasta.fa --alignment-tool minimap2 --alignment-args "-x asm5 -c --secondary=yes"
 ```
 
-If `blastn` or `minimap2` is on `PATH`, the CLI uses it for query alignment. If neither is available, it falls back to exact sequence matching.
+If `blastn` or `minimap2` is on `PATH`, the CLI uses it for query alignment. If neither is available, it falls back to exact sequence matching. PNG output and `--alignment-tool exact` use the lightweight CLI renderer.
 
 Automatically resolve eligible 2-in/2-out repeat nodes, then merge the resolved circular graph:
 
@@ -97,6 +97,7 @@ The macOS standalone app can also be used directly as the same CLI when launched
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --candidate 0
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-merge graph.gfa graph.merged.gfa --candidate 2 --resolved-output graph.resolved.gfa
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --reference-fasta reference.fa
+/Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor image graph.gfa graph.pdf --colour blastsolid --query multi_fasta.fa --alignment-tool minimap2 --alignment-args "-x asm5 -c --secondary=yes"
 ```
 
 Double-clicking the app, or launching it without CLI arguments, still opens the desktop GUI.

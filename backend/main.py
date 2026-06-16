@@ -1593,9 +1593,9 @@ class SftpTransferRequest(BaseModel):
 
 
 app = FastAPI(
-    title="GFA Editor v1.2.9",
+    title="GFA Editor v1.3.0",
     description="A local Bandage-style GFA graph editor.",
-    version="1.2.9",
+    version="1.3.0",
 )
 
 app.add_middleware(
@@ -1627,7 +1627,7 @@ async def bind_editor_session(request: Request, call_next):
 
 @app.get("/api/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok", "version": "1.2.9", "instance_id": INSTANCE_ID}
+    return {"status": "ok", "version": "1.3.0", "instance_id": INSTANCE_ID}
 
 
 @app.post("/api/upload")
