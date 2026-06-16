@@ -1,6 +1,6 @@
-# GFA Editor v1.2.8 User Manual
+# GFA Editor v1.2.9 User Manual
 
-This manual describes the main tools and workflows in GFA Editor v1.2.8. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
+This manual describes the main tools and workflows in GFA Editor v1.2.9. GFA Editor is designed for local viewing, editing, alignment visualization, and export of GFA assembly graphs.
 
 ## 1. Start, Stop, and Data Safety
 
@@ -96,7 +96,7 @@ By default, GFA Editor only reads and writes data on your local machine. It inte
 
 ## 2. Interface Layout
 
-The top bar shows the app icon, `GFA Editor v1.2.8`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
+The top bar shows the app icon, `GFA Editor v1.2.9`, and the current file name on the left. Visualization modes and tool buttons are in the middle. Editing and export buttons are on the right.
 
 The left panel contains Stats, Import, Labels, and Alignments.
 
@@ -282,7 +282,14 @@ For another sample with multiple candidate resolutions, choose the candidate who
 scripts/gfa_editor_cli.py auto-merge graph2.gfa graph2.merged.gfa --reference-merged graph.merged.gfa --resolved-output graph2.resolved.gfa
 ```
 
-The selector compares each candidate after merge, prefers exact circular sequence matches, and otherwise scores long continuous collinear k-mer chains. Passing `--candidate N` still forces that candidate explicitly.
+The same reference-guided selection can use FASTA directly:
+
+```bash
+scripts/gfa_editor_cli.py auto-repeat graph2.gfa graph2.resolved.gfa --reference-fasta reference.fa
+scripts/gfa_editor_cli.py auto-merge graph2.gfa graph2.merged.gfa --reference-fasta reference.fa --resolved-output graph2.resolved.gfa
+```
+
+The selector compares each candidate after merge, prefers exact circular sequence matches, and otherwise scores long continuous collinear k-mer chains. Multi-record FASTA files are supported by choosing the best-matching record for each candidate. Passing `--candidate N` still forces that candidate explicitly.
 
 Other CLI commands mirror common toolbar actions, including `stats`, `export`, `delete`, `duplicate`, `repeat`, `rotate`, `update-node`, and `update-edge`.
 
@@ -291,6 +298,7 @@ The macOS standalone app exposes the same CLI through its bundle executable:
 ```bash
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --candidate 0
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-merge graph.gfa graph.merged.gfa --candidate 2 --resolved-output graph.resolved.gfa
+/Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --reference-fasta reference.fa
 ```
 
 Running the app without command-line arguments still opens the desktop GUI.

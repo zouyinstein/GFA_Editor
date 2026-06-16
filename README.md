@@ -2,7 +2,7 @@
   <img src="frontend/app-icon.png" alt="GFA Editor app icon" width="96">
 </p>
 
-# GFA Editor v1.2.8
+# GFA Editor v1.2.9
 
 GFA Editor is a local Bandage-style viewer and editor for GFA assembly graphs. It provides Cose, Band, and Twin visualization modes, graph editing, alignment visualization, local/server file management, and GFA, FASTA, SVG, and PDF export.
 
@@ -72,7 +72,14 @@ For a second sample with multiple possible resolutions, choose the candidate who
 scripts/gfa_editor_cli.py auto-merge graph2.gfa graph2.merged.gfa --reference-merged graph.merged.gfa --resolved-output graph2.resolved.gfa
 ```
 
-The reference selector first merges each candidate, then scores exact circular sequence matches and long continuous collinear k-mer chains against the reference merged sequence. A manually supplied `--candidate` overrides this automatic reference selection.
+The same reference-guided selection can use a FASTA sequence directly:
+
+```bash
+scripts/gfa_editor_cli.py auto-repeat graph2.gfa graph2.resolved.gfa --reference-fasta reference.fa
+scripts/gfa_editor_cli.py auto-merge graph2.gfa graph2.merged.gfa --reference-fasta reference.fa --resolved-output graph2.resolved.gfa
+```
+
+The reference selector first merges each candidate, then scores exact circular sequence matches and long continuous collinear k-mer chains against the reference merged sequence or FASTA record. Multi-record FASTA files are supported; each candidate is scored against the best-matching record. A manually supplied `--candidate` overrides this automatic reference selection.
 
 Other scripted operations mirror common toolbar actions:
 
@@ -89,6 +96,7 @@ The macOS standalone app can also be used directly as the same CLI when launched
 ```bash
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --candidate 0
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-merge graph.gfa graph.merged.gfa --candidate 2 --resolved-output graph.resolved.gfa
+/Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --reference-fasta reference.fa
 ```
 
 Double-clicking the app, or launching it without CLI arguments, still opens the desktop GUI.

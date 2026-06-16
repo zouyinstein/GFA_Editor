@@ -1,4 +1,4 @@
-# GFA Editor 1.2.8 Implementation Notes
+# GFA Editor 1.2.9 Implementation Notes
 
 This file records the public engineering notes for the CLI repeat-resolution work. It is a concise design and verification summary, not a private chain-of-thought transcript.
 
@@ -31,7 +31,7 @@ This file records the public engineering notes for the CLI repeat-resolution wor
 - Real wheat reference regression selected `auto_repeat_013` with `score=1`, `method=sequence-exact-circular`; the merged sequence matched the reference sequence exactly at length `455027`.
 - Repeated `--candidate 0` runs on the wheat graph produced 100 candidate files with stable candidate numbering and byte-identical outputs for matching candidate IDs.
 
-## 1.2.8 App CLI Mode
+## 1.2.9 App CLI and Reference FASTA Mode
 
 - The macOS standalone app now supports CLI dispatch from its bundle executable.
 - Running `GFA_Editor.app/Contents/MacOS/GFA_Editor` with CLI arguments forwards those arguments to `backend.cli.main`.

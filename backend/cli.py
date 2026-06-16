@@ -172,12 +172,17 @@ def add_auto_repeat_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--candidate",
         default=None,
-        help="Candidate number or id to apply. Use 0 to write all candidates. Defaults to 1, or the best reference match with --reference-merged.",
+        help="Candidate number or id to apply. Use 0 to write all candidates. Defaults to 1, or the best reference match with --reference-merged/--reference-fasta.",
     )
     parser.add_argument(
         "--reference-merged",
         type=Path,
         help="Choose the auto-repeat candidate whose merged sequence/order is closest to this merged GFA.",
+    )
+    parser.add_argument(
+        "--reference-fasta",
+        type=Path,
+        help="Choose the auto-repeat candidate whose merged sequence is closest to this FASTA reference.",
     )
     parser.add_argument("--list-candidates", action="store_true", help="Print candidate summaries")
     parser.add_argument("--prefer-circular", action="store_true", default=False, help="Prefer circular candidates when choosing by number")
@@ -268,7 +273,7 @@ def cmd_auto_repeat(args: argparse.Namespace) -> int:
         max_states=max(1, args.max_states),
         max_candidates=max(1, args.max_candidates),
     )
-    reference_selection = score_candidates_against_reference(candidates, args.reference_merged) if args.reference_merged else None
+    reference_selection = score_candidates_against_reference_args(candidates, args)
     if args.list_candidates:
         print_candidate_summaries(candidates, warning, reference_selection=reference_selection)
     if not candidates:
@@ -332,7 +337,7 @@ def cmd_auto_merge(args: argparse.Namespace) -> int:
         max_states=max(1, args.max_states),
         max_candidates=max(1, args.max_candidates),
     )
-    reference_selection = score_candidates_against_reference(candidates, args.reference_merged) if args.reference_merged else None
+    reference_selection = score_candidates_against_reference_args(candidates, args)
     if args.list_candidates:
         print_candidate_summaries(candidates, warning, reference_selection=reference_selection)
     if not candidates:
@@ -589,10 +594,11 @@ def print_reference_selection(
     best = reference_selection.get("best")
     if not best or best.get("candidate") != selected.id:
         return
+    record_text = f", record={best.get('referenceRecord')}" if best.get("referenceRecord") else ""
     print(
         "reference-selected "
         f"{selected.id}: score={best['score']:.6g}, method={best.get('method', 'unknown')}, "
-        f"reference={reference_selection.get('path')}"
+        f"reference={reference_selection.get('path')}{record_text}"
     )
 
 
@@ -674,7 +680,20 @@ def write_optional_auto_repeat_reports(
         write_text(args.summary_json, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def score_candidates_against_reference(
+def score_candidates_against_reference_args(
+    candidates: List[AutoRepeatCandidate],
+    args: argparse.Namespace,
+) -> Optional[Dict[str, Any]]:
+    if getattr(args, "reference_merged", None) and getattr(args, "reference_fasta", None):
+        raise ValueError("Use only one of --reference-merged or --reference-fasta")
+    if getattr(args, "reference_merged", None):
+        return score_candidates_against_reference_merged(candidates, args.reference_merged)
+    if getattr(args, "reference_fasta", None):
+        return score_candidates_against_reference_fasta(candidates, args.reference_fasta)
+    return None
+
+
+def score_candidates_against_reference_merged(
     candidates: List[AutoRepeatCandidate],
     reference_path: Path,
 ) -> Dict[str, Any]:
@@ -710,11 +729,100 @@ def score_candidates_against_reference(
             ),
         )
     return {
+        "type": "merged-gfa",
         "path": str(reference_path),
         "reference": arrangement_metadata(reference),
         "best": best,
         "scores": scores,
     }
+
+
+def score_candidates_against_reference_fasta(
+    candidates: List[AutoRepeatCandidate],
+    reference_path: Path,
+) -> Dict[str, Any]:
+    if not reference_path.is_file():
+        raise FileNotFoundError(reference_path)
+    records = parse_fasta(reference_path.read_text(encoding="utf-8", errors="replace"))
+    if not records:
+        raise ValueError(f"No FASTA records found in {reference_path}")
+    references = [
+        {
+            "record": record_id,
+            "arrangement": fasta_arrangement(record_id, sequence),
+        }
+        for record_id, sequence in records
+    ]
+    for reference in references:
+        reference["indexes"] = build_reference_sequence_indexes(reference["arrangement"].get("sequence"))
+
+    scores = []
+    for candidate_index, candidate in enumerate(candidates):
+        candidate_graph = candidate.graph.clone()
+        merge_all_nodes(candidate_graph)
+        arrangement = graph_arrangement(candidate_graph)
+        best_score = None
+        for reference in references:
+            score = score_arrangement(
+                arrangement,
+                reference["arrangement"],
+                reference_indexes=reference["indexes"],
+            )
+            score = {
+                "referenceRecord": reference["record"],
+                **score,
+            }
+            if best_score is None or reference_score_key(score, candidate_index) > reference_score_key(best_score, candidate_index):
+                best_score = score
+        scores.append(
+            {
+                "candidate": candidate.id,
+                "candidateIndex": candidate_index + 1,
+                **(best_score or {}),
+            }
+        )
+    best = best_reference_score(scores)
+    return {
+        "type": "fasta",
+        "path": str(reference_path),
+        "reference": {
+            "record_count": len(references),
+            "records": [
+                {
+                    "id": reference["record"],
+                    **arrangement_metadata(reference["arrangement"]),
+                }
+                for reference in references
+            ],
+        },
+        "best": best,
+        "scores": scores,
+    }
+
+
+def best_reference_score(scores: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not scores:
+        return None
+    return max(
+        scores,
+        key=lambda item: (
+            float(item.get("score", 0.0)),
+            float(item.get("continuousFraction", 0.0)),
+            float(item.get("diagonalFraction", 0.0)),
+            -int(item.get("lengthDelta", 0)),
+            -int(item.get("candidateIndex", 0)),
+        ),
+    )
+
+
+def reference_score_key(score: Dict[str, Any], candidate_index: int) -> Tuple[float, float, float, int, int]:
+    return (
+        float(score.get("score", 0.0)),
+        float(score.get("continuousFraction", 0.0)),
+        float(score.get("diagonalFraction", 0.0)),
+        -int(score.get("lengthDelta", 0)),
+        -candidate_index,
+    )
 
 
 def graph_arrangement(graph: GfaGraph) -> Dict[str, Any]:
@@ -726,6 +834,16 @@ def graph_arrangement(graph: GfaGraph) -> Dict[str, Any]:
         "sequence": sequence,
         "length": len(sequence) if sequence is not None else (segment.length if segment is not None else 0),
         "tokens": tokenize_merged_node_id(node_id),
+    }
+
+
+def fasta_arrangement(record_id: str, sequence: str) -> Dict[str, Any]:
+    cleaned_sequence = "".join(str(sequence or "").split()).upper()
+    return {
+        "node_id": record_id,
+        "sequence": cleaned_sequence,
+        "length": len(cleaned_sequence),
+        "tokens": tokenize_merged_node_id(record_id),
     }
 
 

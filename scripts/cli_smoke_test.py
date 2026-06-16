@@ -31,6 +31,9 @@ def main_test() -> None:
         repeat_all_again_path = root / "repeat.again.resolved.gfa"
         repeat_merged_path = root / "repeat.merged.gfa"
         repeat_ref_merged_path = root / "repeat.ref.merged.gfa"
+        repeat_ref_fasta_path = root / "repeat.reference.fa"
+        repeat_fasta_resolved_path = root / "repeat.fasta.resolved.gfa"
+        repeat_fasta_merged_path = root / "repeat.fasta.merged.gfa"
 
         gfa_path.write_text(
             "\n".join(
@@ -155,6 +158,38 @@ def main_test() -> None:
             ]
         )
         assert repeat_merged_path.read_text(encoding="utf-8") == repeat_ref_merged_path.read_text(encoding="utf-8")
+        repeat_merged_graph = parse_gfa_text(repeat_merged_path.read_text(encoding="utf-8"), keep_sequences=True)
+        repeat_merged_sequence = next(iter(repeat_merged_graph.segments.values())).sequence
+        assert repeat_merged_sequence
+        repeat_ref_fasta_path.write_text(f">repeat_reference\n{repeat_merged_sequence}\n", encoding="utf-8")
+        run_cli(
+            [
+                "auto-repeat",
+                str(repeat_path),
+                str(repeat_fasta_resolved_path),
+                "--reference-fasta",
+                str(repeat_ref_fasta_path),
+                "--max-states",
+                "100",
+                "--max-candidates",
+                "10",
+            ]
+        )
+        assert repeat_fasta_resolved_path.read_text(encoding="utf-8") == first_candidate.read_text(encoding="utf-8")
+        run_cli(
+            [
+                "auto-merge",
+                str(repeat_path),
+                str(repeat_fasta_merged_path),
+                "--reference-fasta",
+                str(repeat_ref_fasta_path),
+                "--max-states",
+                "100",
+                "--max-candidates",
+                "10",
+            ]
+        )
+        assert repeat_fasta_merged_path.read_text(encoding="utf-8") == repeat_merged_path.read_text(encoding="utf-8")
 
     print("cli smoke ok")
 
