@@ -1671,7 +1671,7 @@ function buildBandageSvgLayer({ selectedOnly = false, selection = null } = {}) {
       fill: "none",
       stroke: color,
       "stroke-width": Math.max(2.3, edgeWidth * 0.78),
-      "stroke-linecap": "round",
+      "stroke-linecap": "butt",
       "stroke-linejoin": "round",
     }));
     linkLayer.appendChild(svgEl("polygon", {
@@ -1704,7 +1704,7 @@ function buildBandageSvgLayer({ selectedOnly = false, selection = null } = {}) {
       fill: "none",
       stroke: chooseNodeColor(node, graphState.stats, "bandage"),
       "stroke-width": geometry.width,
-      "stroke-linecap": "round",
+      "stroke-linecap": "butt",
       "stroke-linejoin": "round",
     }));
     appendBandageAlignmentSpans(contigGroup, node, geometry);
@@ -1721,7 +1721,8 @@ function exportSvgStyle() {
   return `
     .export-background { fill: #fbfcf8; }
     .export-divider { stroke: #d9ded2; stroke-width: 1; }
-    .export-edge, .export-bandage-link, .bandage-contig-path, .bandage-query-hit-block { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .export-edge { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .export-bandage-link, .bandage-contig-path, .bandage-query-hit-block { fill: none; stroke-linecap: butt; stroke-linejoin: round; }
     .export-node { stroke: rgba(31, 37, 33, 0.45); stroke-width: 1.2; }
     .export-node-label, .export-edge-label, .bandage-node-label, .bandage-link-label {
       fill: #1f2521;

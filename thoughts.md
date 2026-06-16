@@ -1,4 +1,4 @@
-# GFA Editor 1.3.0 Implementation Notes
+# GFA Editor 1.3.1 Implementation Notes
 
 This file records the public engineering notes for the CLI repeat-resolution work. It is a concise design and verification summary, not a private chain-of-thought transcript.
 
@@ -46,3 +46,9 @@ This file records the public engineering notes for the CLI repeat-resolution wor
 - Precomputed `--alignment` files are imported through the same GUI upload alignment endpoint before export.
 - PNG output and `--alignment-tool exact` still use the lightweight CLI renderer; this keeps exact-match fallback available where GUI minimap2/BLAST execution is not appropriate.
 - The tested mito graph exported without grid background and with GUI-style Bandage alignment colouring: unhit contigs use the light alignment background and hit spans use the frontend query palette.
+
+## 1.3.1 Blunt Bandage Export Caps
+
+- Matched CLI/GUI Bandage export stroke caps by changing exported contig and Bandage link paths from round caps to butt caps.
+- Kept alignment hit blocks on butt caps as in the interactive GUI.
+- Updated the lightweight Python fallback renderer so fallback PDF/SVG contig ends are also blunt.

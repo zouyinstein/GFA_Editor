@@ -1055,7 +1055,7 @@ def scene_to_svg(scene: RenderScene) -> str:
         node_path = points_to_svg_path(points)
         lines.append(
             f'<path d="{node_path}" fill="none" stroke="{css(node.color)}" '
-            f'stroke-width="{node.width_px:.2f}" stroke-linecap="round" stroke-linejoin="round"/>'
+            f'stroke-width="{node.width_px:.2f}" stroke-linecap="butt" stroke-linejoin="round"/>'
         )
         lines.append(
             f'<circle cx="{x1:.2f}" cy="{y1:.2f}" r="3.90" fill="#1f2521" opacity="0.85"/>'
@@ -1257,7 +1257,7 @@ def text_width(text: str, scale: int) -> int:
 
 
 def scene_to_pdf(scene: RenderScene) -> bytes:
-    commands = ["1 J 1 j"]
+    commands = ["0 J 1 j"]
     commands.append(f"{pdf_color(BACKGROUND)} rg 0 0 {scene.width} {scene.height} re f")
     for edge in scene.edges:
         commands.append(pdf_stroke(edge.color, edge.width_px))
