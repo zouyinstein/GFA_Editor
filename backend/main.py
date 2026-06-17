@@ -1096,12 +1096,26 @@ def subgraph_from_node_ids(graph: GfaGraph, node_ids: List[str]) -> GfaGraph:
             for link in graph.links
             if link.source in node_id_set and link.target in node_id_set
         ],
+        paths=[
+            copy.deepcopy(path)
+            for path in graph.paths
+            if path_record_belongs_to_nodes(path, node_id_set)
+        ],
         # hifiasm can emit hundreds of thousands of A records. They are not
         # rendered or exported by the editor, so duplicating them into every
         # split component dominates large-file load time.
         other_records=[],
         dropped_sequences=graph.dropped_sequences,
     )
+
+
+def path_record_belongs_to_nodes(path: Any, node_ids: set[str]) -> bool:
+    path_node_ids = {step.segment for step in path.steps}
+    if not path_node_ids or not path_node_ids.issubset(node_ids):
+        return False
+    repeat_node_tag = path.tags.get("RN")
+    repeat_node_id = str(repeat_node_tag.get("value") or repeat_node_tag.get("raw")) if repeat_node_tag else ""
+    return not repeat_node_id or repeat_node_id in node_ids
 
 
 def connected_component_node_sets(graph: GfaGraph) -> List[List[str]]:
@@ -1593,9 +1607,9 @@ class SftpTransferRequest(BaseModel):
 
 
 app = FastAPI(
-    title="GFA Editor v1.3.1",
+    title="GFA Editor v1.3.2",
     description="A local Bandage-style GFA graph editor.",
-    version="1.3.1",
+    version="1.3.2",
 )
 
 app.add_middleware(
@@ -1627,7 +1641,7 @@ async def bind_editor_session(request: Request, call_next):
 
 @app.get("/api/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok", "version": "1.3.1", "instance_id": INSTANCE_ID}
+    return {"status": "ok", "version": "1.3.2", "instance_id": INSTANCE_ID}
 
 
 @app.post("/api/upload")

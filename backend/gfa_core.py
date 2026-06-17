@@ -20,7 +20,7 @@ CUSTOM_LABEL_TAG = "LB"
 _COMPLEMENT = str.maketrans("ACGTRYKMSWBDHVNacgtrykmswbdhvn", "TGCAYRMKSWVHDBNtgcayrmkswvhdbn")
 _BLANK_BYTE_LINES = (b"\n", b"\r\n")
 _BLANK_TEXT_LINES = ("\n", "\r\n")
-_CORE_RECORD_BYTES = (b"H", b"S", b"L")
+_CORE_RECORD_BYTES = (b"H", b"S", b"L", b"P")
 
 
 def _coerce_number(value: Any) -> Optional[float]:
@@ -185,6 +185,20 @@ class Link:
         return duplicate
 
 
+@dataclass
+class PathStep:
+    segment: str
+    orient: str = "+"
+
+
+@dataclass
+class PathRecord:
+    name: str
+    steps: List[PathStep] = field(default_factory=list)
+    overlaps: List[str] = field(default_factory=list)
+    tags: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+
 def unique_links(links: Iterable[Link]) -> List[Link]:
     seen_link_keys: set[Tuple[Tuple[str, str], Tuple[str, str]]] = set()
     unique: List[Link] = []
@@ -210,6 +224,7 @@ class GfaGraph:
     headers: List[List[str]] = field(default_factory=list)
     segments: Dict[str, Segment] = field(default_factory=dict)
     links: List[Link] = field(default_factory=list)
+    paths: List[PathRecord] = field(default_factory=list)
     other_records: List[List[str]] = field(default_factory=list)
     dropped_sequences: bool = False
 
@@ -232,6 +247,7 @@ class GfaGraph:
         return {
             "node_count": len(self.segments),
             "edge_count": len(links),
+            "path_count": len(self.paths),
             "total_bp": sum(lengths),
             "min_depth": min(depths) if depths else None,
             "max_depth": max(depths) if depths else None,
@@ -248,6 +264,7 @@ class GfaGraph:
         max_length = max((segment.length for segment in self.segments.values()), default=1)
         max_support = stats["max_support"] or 1
         links = unique_links(self.links)
+        paths_by_segment = self._client_paths_by_segment()
 
         nodes = []
         for segment in self.segments.values():
@@ -255,11 +272,16 @@ class GfaGraph:
             normalized_length = math.log10(max(segment.length, 1)) / math.log10(max(max_length, 10))
             custom_label = _string_tag(segment.tags, CUSTOM_LABEL_TAG)
             custom_color = _string_tag(segment.tags, CUSTOM_COLOR_TAG)
+            node_class = _string_tag(segment.tags, "NC")
+            segment_paths = paths_by_segment.get(segment.id, [])
+            is_repeat_node = _is_repeat_node(segment, segment_paths)
             data: Dict[str, Any] = {
                 "id": segment.id,
                 "label": custom_label or segment.id,
                 "customLabel": custom_label,
                 "customColor": custom_color,
+                "nodeClass": node_class,
+                "isRepeatNode": is_repeat_node,
                 "length": segment.length,
                 "depth": segment.depth,
                 "degree": 0,
@@ -271,7 +293,10 @@ class GfaGraph:
                 "blastBest": best_blast_hit(segment.blast_hits),
                 "blastHitCount": len(segment.blast_hits),
                 "alignmentSpans": alignment_spans(segment.id, segment.length, segment.blast_hits),
+                "gfaPathCount": len(segment_paths),
             }
+            if segment_paths:
+                data["gfaPaths"] = [_path_record_to_client(path) for path in segment_paths]
             if include_sequences and segment.sequence is not None:
                 data["sequence"] = segment.sequence
             nodes.append({"data": data})
@@ -317,6 +342,23 @@ class GfaGraph:
             "histogram": histogram_values([node["data"].get("depth") for node in nodes]),
         }
 
+    def _client_paths_by_segment(self) -> Dict[str, List[PathRecord]]:
+        paths_by_segment: Dict[str, List[PathRecord]] = {}
+        for path in self.paths:
+            repeat_node_id = _string_tag(path.tags, "RN")
+            if repeat_node_id:
+                paths_by_segment.setdefault(repeat_node_id, []).append(path)
+                continue
+            seen_segment_ids: set[str] = set()
+            for step in path.steps:
+                if not step.segment or step.segment in seen_segment_ids:
+                    continue
+                seen_segment_ids.add(step.segment)
+                paths_by_segment.setdefault(step.segment, []).append(path)
+        for paths in paths_by_segment.values():
+            paths.sort(key=_path_record_sort_key)
+        return paths_by_segment
+
 
 def depth_color(value: float) -> str:
     clamped = max(0.0, min(value, 1.0))
@@ -334,6 +376,78 @@ def depth_color(value: float) -> str:
 
 def compact_tags(tags: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     return {tag: payload.get("value", payload.get("raw")) for tag, payload in tags.items()}
+
+
+def _parse_path_steps(raw_path: str) -> List[PathStep]:
+    if not raw_path or raw_path == "*":
+        return []
+    steps: List[PathStep] = []
+    for raw_step in raw_path.split(","):
+        item = raw_step.strip()
+        if not item:
+            continue
+        orient = item[-1] if item[-1] in {"+", "-"} else "+"
+        segment_id = item[:-1] if item[-1] in {"+", "-"} else item
+        if not segment_id:
+            continue
+        steps.append(PathStep(segment=segment_id, orient=orient))
+    return steps
+
+
+def _parse_path_overlaps(raw_overlaps: str) -> List[str]:
+    if not raw_overlaps or raw_overlaps == "*":
+        return []
+    return [item.strip() for item in raw_overlaps.split(",") if item.strip()]
+
+
+def _is_repeat_node(segment: Segment, paths: List[PathRecord]) -> bool:
+    node_class = (_string_tag(segment.tags, "NC") or "").lower()
+    if "repeat" in node_class:
+        return True
+    return any((_string_tag(path.tags, "PT") or "").lower() == "repeat_path_support" for path in paths)
+
+
+def _path_record_sort_key(path: PathRecord) -> Tuple[int, str, str]:
+    path_index = _string_tag(path.tags, "PI") or ""
+    match = re.search(r"(\d+)$", path_index)
+    if match:
+        return (int(match.group(1)), path_index, path.name)
+    name_match = re.search(r"[_-]p(\d+)$", path.name)
+    if name_match:
+        return (int(name_match.group(1)), path_index, path.name)
+    return (10**9, path_index, path.name)
+
+
+def _path_record_to_client(path: PathRecord) -> Dict[str, Any]:
+    tags = path.tags
+    steps = [
+        {
+            "node": step.segment,
+            "orient": step.orient,
+            "label": f"{step.segment}{step.orient}",
+        }
+        for step in path.steps
+    ]
+    return {
+        "name": path.name,
+        "pathIndex": _string_tag(tags, "PI"),
+        "repeatNodeId": _string_tag(tags, "RN"),
+        "status": _string_tag(tags, "RS"),
+        "method": _string_tag(tags, "PM"),
+        "type": _string_tag(tags, "PT"),
+        "supportCount": _first_numeric_tag(tags, ("RC",)),
+        "supportRatio": _first_numeric_tag(tags, ("PR",)),
+        "uniqueReads": _first_numeric_tag(tags, ("UR",)),
+        "assignedReads": _first_numeric_tag(tags, ("AR",)),
+        "candidateReads": _first_numeric_tag(tags, ("CR",)),
+        "flankReads": _first_numeric_tag(tags, ("FR",)),
+        "leftEnd": _string_tag(tags, "LE"),
+        "rightEnd": _string_tag(tags, "RE"),
+        "steps": steps,
+        "path": " > ".join(step["label"] for step in steps),
+        "overlaps": list(path.overlaps),
+        "tags": compact_tags(tags),
+    }
 
 
 def histogram_values(values: Iterable[Optional[float]], bins: int = 18) -> List[Dict[str, float]]:
@@ -500,6 +614,18 @@ def parse_gfa_lines(
             graph.links.append(link)
             edge_index += 1
             continue
+        if record_type == "P":
+            if len(fields) < 4:
+                raise ValueError(f"Invalid P record on line {line_number}: expected at least 4 fields")
+            graph.paths.append(
+                PathRecord(
+                    name=fields[1],
+                    steps=_parse_path_steps(fields[2]),
+                    overlaps=_parse_path_overlaps(fields[3]),
+                    tags=parse_tags(fields[4:]),
+                )
+            )
+            continue
         if keep_other_records:
             graph.other_records.append(fields)
     return graph
@@ -525,6 +651,7 @@ def delete_node(graph: GfaGraph, node_id: str) -> Dict[str, Any]:
     del graph.segments[node_id]
     before = len(graph.links)
     graph.links = [link for link in graph.links if link.source != node_id and link.target != node_id]
+    _remove_paths_touching_nodes(graph, {node_id})
     return {"node_id": node_id, "removed_edges": before - len(graph.links)}
 
 
@@ -567,6 +694,7 @@ def delete_selection(
         and link.source not in selected_nodes
         and link.target not in selected_nodes
     ]
+    _remove_paths_touching_nodes(graph, selected_nodes)
     return {
         "node_ids": selected_node_ids,
         "edge_ids": selected_edge_ids,
@@ -606,6 +734,7 @@ def update_node(
                 link.source = new_id
             if link.target == old_id:
                 link.target = new_id
+        _replace_path_node_id(graph, old_id, new_id)
         renumber_links(graph)
         segment = graph.segments[new_id]
 
@@ -790,6 +919,7 @@ def merge_link(
         merged_segments[segment_id] = segment
     graph.segments = merged_segments
     graph.links = rewired_links
+    _remove_paths_touching_nodes(graph, {source_id, target_id})
     return {
         "edge_id": edge_id,
         "source_node_id": source_id,
@@ -934,6 +1064,49 @@ def _unique_nonempty_ids(ids: Iterable[str]) -> List[str]:
         unique_ids.append(item_id)
         seen.add(item_id)
     return unique_ids
+
+
+def _remove_paths_touching_nodes(graph: GfaGraph, node_ids: set[str]) -> None:
+    if not node_ids or not graph.paths:
+        return
+    graph.paths = [
+        path
+        for path in graph.paths
+        if not _path_record_touches_nodes(path, node_ids)
+    ]
+
+
+def _path_record_touches_nodes(path: PathRecord, node_ids: set[str]) -> bool:
+    repeat_node_id = _string_tag(path.tags, "RN")
+    if repeat_node_id in node_ids:
+        return True
+    return any(step.segment in node_ids for step in path.steps)
+
+
+def _replace_path_node_id(graph: GfaGraph, old_id: str, new_id: str) -> None:
+    if not graph.paths:
+        return
+    for path in graph.paths:
+        for step in path.steps:
+            if step.segment == old_id:
+                step.segment = new_id
+        if _string_tag(path.tags, "RN") == old_id:
+            _set_tag(path.tags, "RN", "Z", new_id)
+        for tag in ("LE", "RE"):
+            _replace_path_endpoint_tag(path.tags, tag, old_id, new_id)
+
+
+def _replace_path_endpoint_tag(tags: Dict[str, Dict[str, Any]], tag: str, old_id: str, new_id: str) -> None:
+    value = _string_tag(tags, tag)
+    if not value:
+        return
+    if value == old_id:
+        _set_tag(tags, tag, "Z", new_id)
+        return
+    for orient in ("+", "-"):
+        if value == f"{old_id}{orient}":
+            _set_tag(tags, tag, "Z", f"{new_id}{orient}")
+            return
 
 
 def _selected_merge_path(graph: GfaGraph, node_ids: List[str], edge_ids: Optional[List[str]] = None) -> tuple:

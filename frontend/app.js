@@ -3557,6 +3557,7 @@ function nodeMatches(data, query) {
     best?.sseqid,
     best?.path,
     best?.pident,
+    data.gfaPaths ? JSON.stringify(data.gfaPaths) : "",
     data.tags ? JSON.stringify(data.tags) : "",
   ]
     .filter(Boolean)
@@ -7250,13 +7251,19 @@ function renderNodeDetails(data) {
   const rows = [
     ["ID", data.id],
     ["Label", data.customLabel || "-"],
+    ["Class", data.nodeClass || (data.isRepeatNode ? "repeat_node" : "-")],
     ["Length", number(data.length)],
     ["Depth", number(data.depth)],
     ["Degree", number(data.degree)],
+    ["P paths", number(data.gfaPathCount || 0)],
     ["Alignment hits", number(data.blastHitCount)],
     ["Tags", formatTags(data.tags)],
   ];
   dom.selectionDetails.replaceChildren(...rows.map(([key, value]) => detailRow(key, value)));
+  const repeatPaths = repeatPathSection(data);
+  if (repeatPaths) {
+    dom.selectionDetails.appendChild(repeatPaths);
+  }
   dom.selectionDetails.appendChild(nodeEditForm(data));
   if (data.blastBest) {
     const title = document.createElement("h2");
@@ -7265,6 +7272,93 @@ function renderNodeDetails(data) {
     const hit = hitCard(data.blastBest);
     dom.selectionDetails.append(title, hit);
   }
+}
+
+function repeatPathSection(data) {
+  const paths = Array.isArray(data.gfaPaths) ? data.gfaPaths : [];
+  if (!data.isRepeatNode && !paths.length) return null;
+  const section = document.createElement("section");
+  section.className = "repeat-path-section";
+  const title = document.createElement("h2");
+  title.textContent = paths.length ? `Repeat Paths (${paths.length})` : "Repeat Paths";
+  section.appendChild(title);
+  if (!paths.length) {
+    section.appendChild(emptyDetails("No P path records for this repeat node"));
+    return section;
+  }
+  const list = document.createElement("div");
+  list.className = "repeat-path-list";
+  paths.forEach((path, index) => {
+    list.appendChild(repeatPathCard(path, data.id, index));
+  });
+  section.appendChild(list);
+  return section;
+}
+
+function repeatPathCard(path, nodeId, index) {
+  const card = document.createElement("article");
+  card.className = "repeat-path-card";
+
+  const header = document.createElement("div");
+  header.className = "repeat-path-header";
+  const title = document.createElement("strong");
+  title.textContent = `${path.pathIndex || `p${index + 1}`} · ${path.name || "P record"}`;
+  const meta = document.createElement("span");
+  meta.textContent = repeatPathMeta(path);
+  header.append(title, meta);
+  card.appendChild(header);
+
+  const pathLine = document.createElement("div");
+  pathLine.className = "repeat-path-line";
+  const steps = Array.isArray(path.steps) ? path.steps : [];
+  steps.forEach((step, stepIndex) => {
+    if (stepIndex > 0) {
+      const arrow = document.createElement("span");
+      arrow.className = "repeat-path-arrow";
+      arrow.textContent = ">";
+      pathLine.appendChild(arrow);
+    }
+    const token = document.createElement("span");
+    token.className = "repeat-path-step";
+    token.classList.toggle("repeat-focus", step.node === (path.repeatNodeId || nodeId));
+    token.textContent = step.label || `${step.node || "-"}${step.orient || ""}`;
+    pathLine.appendChild(token);
+  });
+  if (!steps.length) {
+    const token = document.createElement("span");
+    token.className = "repeat-path-step";
+    token.textContent = path.path || "-";
+    pathLine.appendChild(token);
+  }
+  card.appendChild(pathLine);
+
+  const details = document.createElement("div");
+  details.className = "repeat-path-details";
+  details.append(
+    detailRow("Left", path.leftEnd || "-"),
+    detailRow("Right", path.rightEnd || "-"),
+    detailRow("Reads", repeatReadSummary(path)),
+    detailRow("Status", path.status || "-"),
+  );
+  card.appendChild(details);
+  return card;
+}
+
+function repeatPathMeta(path) {
+  const bits = [];
+  if (path.supportCount != null) bits.push(`count ${number(path.supportCount)}`);
+  if (path.supportRatio != null) bits.push(`ratio ${formatRatio(path.supportRatio)}`);
+  if (path.method) bits.push(path.method);
+  return bits.join(" · ") || "P record";
+}
+
+function repeatReadSummary(path) {
+  const bits = [];
+  if (path.uniqueReads != null) bits.push(`unique ${number(path.uniqueReads)}`);
+  if (path.assignedReads != null) bits.push(`assigned ${number(path.assignedReads)}`);
+  if (path.candidateReads != null) bits.push(`candidate ${number(path.candidateReads)}`);
+  if (path.flankReads != null) bits.push(`flank ${number(path.flankReads)}`);
+  return bits.join(" · ") || "-";
 }
 
 function renderEdgeDetails(data) {
@@ -7452,6 +7546,7 @@ function renderStats(stats) {
     ? [
         ["Nodes", stats.node_count],
         ["Links", stats.edge_count],
+        ...(stats.path_count ? [["Paths", stats.path_count]] : []),
         ["Total bp", stats.total_bp],
         ["Median depth", stats.median_depth],
       ]
@@ -7677,6 +7772,13 @@ function number(value) {
   if (typeof value === "string") return value;
   if (!Number.isFinite(Number(value))) return String(value);
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatRatio(value) {
+  if (value == null || value === "") return "-";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(numeric * 100)}%`;
 }
 
 function clamp(value, min, max) {

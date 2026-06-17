@@ -1,54 +1,27 @@
-# GFA Editor 1.3.1 Implementation Notes
+# GFA Editor 1.3.2 Implementation Notes
 
-This file records the public engineering notes for the CLI repeat-resolution work. It is a concise design and verification summary, not a private chain-of-thought transcript.
+## Goal
 
-## Scope
+Support visualization of GFA `P` records as repeat path evidence in the node inspector, especially for verified organelle GFA files that encode repeat traversal candidates with `PT:Z:repeat_path_support` and `RN:Z:<node_id>` tags.
 
-- Added command-line graph rendering with Bandage-style `image` usage, including `--colour blastsolid --query`.
-- Added command-line repeat-resolution workflows: `auto-repeat`, `merge`, and `auto-merge`.
-- Added support for exporting every auto-repeat candidate with `--candidate 0`.
-- Added reference-guided `auto-merge` selection for second samples with multiple candidate resolutions.
+## Summary
 
-## Candidate Numbering
+- Added `PathRecord` and `PathStep` models to parse and preserve `P` lines alongside existing `S` and `L` graph records.
+- Exposed per-node path summaries in the client payload through `gfaPathCount`, `gfaPaths`, `nodeClass`, and `isRepeatNode`.
+- Bound paths primarily by `RN` tags; if `RN` is absent, paths can still be associated by segment membership.
+- Added repeat path cards to the inspector so selecting a repeat node shows path id, ordered steps, support count, support ratio, read counts, status, and left/right endpoints.
+- Preserved `P` records in light-mode parsing and auto-split views when the full path belongs to the selected component.
+- Kept graph topology unchanged: `P` records are displayed as read-support evidence and do not create additional graph edges.
+- Updated version metadata and UI labels to `1.3.2`.
 
-- Candidate IDs are normalized as `auto_repeat_001`, `auto_repeat_002`, and so on.
-- Candidate order is deterministic for the same input.
-- Numbering is based on head-to-tail continuous sequence features after each candidate is merged, so a candidate number represents the merged arrangement rather than the incidental search order.
+## Observations
 
-## Reference-Guided Selection
+- The mito verified GFA contains two repeat nodes, each with four repeat path records, so the inspector shows four path cards per repeat node.
+- The plastid verified GFA contains one repeat node, `utg2`, with sixteen ambiguous path records. All sixteen have zero support count and zero support ratio, so the inspector should show `P paths: 16` when `utg2` is selected.
+- A missing display after updating code may be caused by an old running service or browser cache. The frontend cache-busting query string was updated from `v131` to `v132`.
 
-- `auto-merge --reference-merged reference.gfa` merges each auto-repeat candidate and compares the resulting single sequence with the reference merged graph.
-- Exact circular sequence matches are preferred and receive score `1.0`.
-- Otherwise, candidates are scored by long continuous collinear k-mer chains against the reference merged sequence, checking both forward and reverse-complement orientations.
-- A manual `--candidate N` still overrides reference-guided selection.
+## Validation
 
-## Verification
-
-- `python3 -m py_compile backend/cli.py backend/graph_ops.py scripts/cli_smoke_test.py`
-- `python3 scripts/cli_smoke_test.py`
-- `python3 scripts/merge_selection_smoke_test.py`
-- `.venv/bin/python scripts/api_smoke_test.py examples/mecat_mito_500K_before_rr.gfa`
-- Real wheat reference regression selected `auto_repeat_013` with `score=1`, `method=sequence-exact-circular`; the merged sequence matched the reference sequence exactly at length `455027`.
-- Repeated `--candidate 0` runs on the wheat graph produced 100 candidate files with stable candidate numbering and byte-identical outputs for matching candidate IDs.
-
-## 1.2.9 App CLI and Reference FASTA Mode
-
-- The macOS standalone app now supports CLI dispatch from its bundle executable.
-- Running `GFA_Editor.app/Contents/MacOS/GFA_Editor` with CLI arguments forwards those arguments to `backend.cli.main`.
-- Running the app without CLI arguments, or with only the Finder `-psn_...` launch argument, still opens the desktop GUI.
-- CLI mode preserves the caller's current working directory so relative input and output paths behave like `scripts/gfa_editor_cli.py`.
-
-## 1.3.0 GUI-Matched CLI Alignment Export
-
-- CLI `.pdf` and `.svg` Bandage image export now uses a hidden GUI renderer instead of the lightweight Python renderer when possible.
-- `image --colour blastsolid --query` stages the GFA in a temporary GUI session, runs the same `/api/run_alignment` flow used by the app, and exports through `buildGraphSvgExport` / `buildPdfFromSvg`.
-- Query FASTA input is passed to the browser session as an in-memory `File`, so the frontend keeps the same session state, alignment spans, query colours, and light hit background behavior as the interactive GUI.
-- Precomputed `--alignment` files are imported through the same GUI upload alignment endpoint before export.
-- PNG output and `--alignment-tool exact` still use the lightweight CLI renderer; this keeps exact-match fallback available where GUI minimap2/BLAST execution is not appropriate.
-- The tested mito graph exported without grid background and with GUI-style Bandage alignment colouring: unhit contigs use the light alignment background and hit spans use the frontend query palette.
-
-## 1.3.1 Blunt Bandage Export Caps
-
-- Matched CLI/GUI Bandage export stroke caps by changing exported contig and Bandage link paths from round caps to butt caps.
-- Kept alignment hit blocks on butt caps as in the interactive GUI.
-- Updated the lightweight Python fallback renderer so fallback PDF/SVG contig ends are also blunt.
+- Added `scripts/gfa_path_smoke_test.py` to verify parsing, client payload fields, path ordering, node rename synchronization, and path cleanup after node deletion.
+- Verified the mito file reports eight `P` records and exposes four paths for each repeat node.
+- Verified the plastid file reports sixteen `P` records and exposes all sixteen paths on `utg2`.
