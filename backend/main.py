@@ -61,6 +61,7 @@ from .edit_history import (
     history_step_from_event,
     infer_edit_history,
 )
+from .version import APP_VERSION
 
 
 ROOT_DIR = Path(os.environ.get("GFA_EDITOR_ROOT", Path(__file__).resolve().parents[1])).resolve()
@@ -1607,9 +1608,9 @@ class SftpTransferRequest(BaseModel):
 
 
 app = FastAPI(
-    title="GFA Editor v1.3.2",
+    title=f"GFA Editor v{APP_VERSION}",
     description="A local Bandage-style GFA graph editor.",
-    version="1.3.2",
+    version=APP_VERSION,
 )
 
 app.add_middleware(
@@ -1641,7 +1642,7 @@ async def bind_editor_session(request: Request, call_next):
 
 @app.get("/api/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok", "version": "1.3.2", "instance_id": INSTANCE_ID}
+    return {"status": "ok", "version": APP_VERSION, "instance_id": INSTANCE_ID}
 
 
 @app.post("/api/upload")

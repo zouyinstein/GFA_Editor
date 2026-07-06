@@ -13,10 +13,15 @@ import sys
 import threading
 import time
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, IO, List, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 import webbrowser
+
+from backend.version import APP_VERSION
+
+
+_STDIO_LOG_HANDLE: Optional[IO[str]] = None
 
 
 def runtime_root() -> Path:
@@ -111,6 +116,7 @@ def start_server(port: int):
         host="127.0.0.1",
         port=port,
         log_level=os.environ.get("GFA_EDITOR_LOG_LEVEL", "info"),
+        access_log=False,
         reload=False,
     )
     server = uvicorn.Server(config)
@@ -121,13 +127,13 @@ def start_server(port: int):
 
 class DesktopApi:
     def __init__(self) -> None:
-        self.window = None
+        self._window = None
 
-    def bind_window(self, window) -> None:
-        self.window = window
+    def _bind_window(self, window) -> None:
+        self._window = window
 
     def save_text_file(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        if self.window is None:
+        if self._window is None:
             return {"ok": False, "message": "Desktop window is not ready."}
 
         try:
@@ -137,7 +143,7 @@ class DesktopApi:
             contents = str(payload.get("contents") or "")
             raw_file_types = payload.get("file_types") or []
             file_types = tuple(str(item) for item in raw_file_types if str(item).strip())
-            selected = self.window.create_file_dialog(
+            selected = self._window.create_file_dialog(
                 webview.SAVE_DIALOG,
                 save_filename=filename,
                 file_types=file_types,
@@ -186,7 +192,7 @@ class DesktopApi:
             return {"ok": False, "message": f"Save failed: {exc}"}
 
     def save_binary_file(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        if self.window is None:
+        if self._window is None:
             return {"ok": False, "message": "Desktop window is not ready."}
 
         try:
@@ -195,7 +201,7 @@ class DesktopApi:
             filename = str(payload.get("filename") or "export.bin")
             raw_file_types = payload.get("file_types") or []
             file_types = tuple(str(item) for item in raw_file_types if str(item).strip())
-            selected = self.window.create_file_dialog(
+            selected = self._window.create_file_dialog(
                 webview.SAVE_DIALOG,
                 save_filename=filename,
                 file_types=file_types,
@@ -223,14 +229,14 @@ def run_embedded_webview(url: str, server) -> None:
 
     api = DesktopApi()
     window = webview.create_window(
-        "GFA Editor v1.3.2",
+        f"GFA Editor v{APP_VERSION}",
         url,
         width=1440,
         height=920,
         min_size=(1000, 680),
         js_api=api,
     )
-    api.bind_window(window)
+    api._bind_window(window)
 
     def stop_server() -> None:
         server.should_exit = True
@@ -271,7 +277,23 @@ def write_failure_log(exc: BaseException) -> None:
             handle.write("\n--- GFA Editor desktop failure ---\n")
             handle.write(traceback.format_exc())
     except Exception:
-        print(f"Failed to write desktop failure log for: {exc}", file=sys.stderr)
+        try:
+            print(f"Failed to write desktop failure log for: {exc}", file=sys.stderr)
+        except Exception:
+            pass
+
+
+def ensure_standard_streams(data_dir: Path) -> None:
+    global _STDIO_LOG_HANDLE
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+
+    log_path = data_dir / "desktop-runtime.log"
+    _STDIO_LOG_HANDLE = log_path.open("a", encoding="utf-8", buffering=1)
+    if sys.stdout is None:
+        sys.stdout = _STDIO_LOG_HANDLE
+    if sys.stderr is None:
+        sys.stderr = _STDIO_LOG_HANDLE
 
 
 def main() -> int:
@@ -288,6 +310,7 @@ def main() -> int:
     data_dir = Path(os.environ.get("GFA_EDITOR_DATA_DIR", Path.home() / "GFAEditorData")).expanduser()
     data_dir.mkdir(parents=True, exist_ok=True)
     os.environ["GFA_EDITOR_DATA_DIR"] = str(data_dir)
+    ensure_standard_streams(data_dir)
 
     preferred_port = int(os.environ.get("GFA_EDITOR_PORT", "8000"))
     port = find_available_port(preferred_port)

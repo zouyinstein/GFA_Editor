@@ -30,7 +30,7 @@ if (-not (Test-Path ".venv")) {
 & $Python -m pip install -r packaging\requirements-desktop.txt
 
 if (-not $SkipToolCollect) {
-    & $Python scripts\collect_alignment_tools.py
+    & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\collect_windows_alignment_tools.ps1
 }
 
 & $Python scripts\generate_app_icons.py

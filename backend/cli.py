@@ -44,6 +44,7 @@ from .graph_ops import (
     graph_is_circular_subgraph,
     graph_is_connected,
 )
+from .version import APP_VERSION
 
 
 DEFAULT_AUTO_REPEAT_MAX_STATES = 5000
@@ -69,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="gfa-editor",
         description="Command-line GFA Editor tools for drawing, repeat resolution, merging, export, and scripted edits.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {APP_VERSION}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     stats = subparsers.add_parser("stats", help="Print graph statistics")
@@ -921,12 +923,15 @@ def score_sequence_arrangement(
         return exact_match
     best: Dict[str, Any] = {
         "score": 0.0,
-        "method": "sequence-continuous-kmer",
+        "method": "sequence-global-kmer-chain",
         "orientation": "+",
         "kmer": None,
         "sampledKmers": 0,
         "matchedKmers": 0,
         "bestDiagonalCount": 0,
+        "globalChainKmers": 0,
+        "globalChainBp": 0,
+        "globalChainFraction": 0.0,
         "continuousBp": 0,
         "continuousFraction": 0.0,
         "diagonalFraction": 0.0,
@@ -944,7 +949,7 @@ def score_sequence_arrangement(
             ("+", candidate_sequence),
             ("-", reverse_complement(candidate_sequence)),
         ):
-            score = continuous_kmer_score(oriented_sequence, reference_sequence, reference_index, kmer_size)
+            score = global_kmer_chain_score(oriented_sequence, reference_sequence, reference_index, kmer_size)
             score["orientation"] = orientation
             if (
                 score["score"] > best["score"]
@@ -1090,6 +1095,171 @@ def continuous_kmer_score(
         "continuousKmers": continuous_kmers,
         "continuousFraction": continuous_fraction,
     }
+
+
+def global_kmer_chain_score(
+    candidate_sequence: str,
+    reference_sequence: str,
+    reference_index: Dict[str, List[int]],
+    kmer_size: int,
+) -> Dict[str, Any]:
+    reference_length = len(reference_sequence)
+    candidate_limit = len(candidate_sequence) - kmer_size + 1
+    stride = max(1, len(candidate_sequence) // 5000)
+    bin_size = max(25, reference_length // 5000) if reference_length else 25
+    sampled = 0
+    matched = 0
+    diagonal_bins: Counter[int] = Counter()
+    anchors: List[Tuple[int, int, int]] = []
+    reference_copies = max(2, (len(candidate_sequence) // max(reference_length, 1)) + 2)
+    for query_position in range(0, max(0, candidate_limit), stride):
+        kmer = candidate_sequence[query_position : query_position + kmer_size]
+        if not valid_dna_kmer(kmer):
+            continue
+        sampled += 1
+        reference_positions = reference_index.get(kmer)
+        if not reference_positions or len(reference_positions) > 50:
+            continue
+        matched += 1
+        for reference_position in reference_positions:
+            diagonal = (reference_position - query_position) % reference_length
+            diagonal_bin = diagonal // bin_size
+            diagonal_bins[diagonal_bin] += 1
+            for copy_index in range(reference_copies):
+                unwrapped_reference_position = reference_position + (copy_index * reference_length)
+                anchors.append((query_position, unwrapped_reference_position, reference_position))
+
+    chain = longest_global_kmer_chain(anchors, kmer_size)
+    chain_kmers = len(chain)
+    if chain_kmers:
+        chain_bp = min(len(candidate_sequence), ((chain_kmers - 1) * stride) + kmer_size)
+        query_start = chain[0][0]
+        query_end = chain[-1][0] + kmer_size
+        reference_start = chain[0][1]
+        reference_end = chain[-1][1] + kmer_size
+    else:
+        chain_bp = 0
+        query_start = None
+        query_end = None
+        reference_start = None
+        reference_end = None
+    best_diagonal_count = max(diagonal_bins.values()) if diagonal_bins else 0
+    best_bin = diagonal_bins.most_common(1)[0][0] if diagonal_bins else None
+    chain_fraction = chain_kmers / sampled if sampled else 0.0
+    continuous_fraction = chain_bp / max(len(candidate_sequence), len(reference_sequence), 1)
+    diagonal_fraction = best_diagonal_count / sampled if sampled else 0.0
+    return {
+        "score": chain_fraction,
+        "method": f"sequence-global-kmer-chain-{kmer_size}",
+        "kmer": kmer_size,
+        "sampledKmers": sampled,
+        "matchedKmers": matched,
+        "bestDiagonalCount": best_diagonal_count,
+        "bestDiagonalBin": best_bin,
+        "diagonalBinSize": bin_size,
+        "diagonalFraction": diagonal_fraction,
+        "globalChainKmers": chain_kmers,
+        "globalChainBp": chain_bp,
+        "globalChainFraction": chain_fraction,
+        "globalChainQueryStart": query_start,
+        "globalChainQueryEnd": query_end,
+        "globalChainReferenceStart": reference_start,
+        "globalChainReferenceEnd": reference_end,
+        "continuousBp": chain_bp,
+        "continuousKmers": chain_kmers,
+        "continuousFraction": continuous_fraction,
+    }
+
+
+def longest_global_kmer_chain(
+    anchors: List[Tuple[int, int, int]],
+    kmer_size: int,
+) -> List[Tuple[int, int, int]]:
+    if not anchors:
+        return []
+    sorted_anchors = sorted(set(anchors))
+    reference_coordinates = sorted({anchor[1] for anchor in sorted_anchors})
+    coordinate_rank = {coordinate: index + 1 for index, coordinate in enumerate(reference_coordinates)}
+    states: List[Tuple[int, int, int, int, int, int, int, int, int]] = []
+    tree = [-1] * (len(reference_coordinates) + 1)
+
+    def state_key(index: int) -> Tuple[int, int, int, int, int]:
+        if index < 0:
+            return (0, 0, 0, 0, 0)
+        count, query_start, query_end, reference_start, reference_end, *_ = states[index]
+        return (
+            count,
+            query_end - query_start + kmer_size,
+            reference_end - reference_start + kmer_size,
+            -query_start,
+            -reference_start,
+        )
+
+    def better(left: int, right: int) -> int:
+        return left if state_key(left) >= state_key(right) else right
+
+    def update(rank: int, state_index: int) -> None:
+        while rank < len(tree):
+            tree[rank] = better(state_index, tree[rank])
+            rank += rank & -rank
+
+    def query(rank: int) -> int:
+        best = -1
+        while rank > 0:
+            best = better(best, tree[rank])
+            rank -= rank & -rank
+        return best
+
+    index = 0
+    best_state = -1
+    while index < len(sorted_anchors):
+        query_position = sorted_anchors[index][0]
+        group_updates: List[Tuple[int, int]] = []
+        while index < len(sorted_anchors) and sorted_anchors[index][0] == query_position:
+            query_pos, reference_pos, reference_mod_pos = sorted_anchors[index]
+            rank = coordinate_rank[reference_pos]
+            predecessor = query(rank - 1)
+            if predecessor >= 0:
+                count, query_start, _, reference_start, _, *_ = states[predecessor]
+                state = (
+                    count + 1,
+                    query_start,
+                    query_pos,
+                    reference_start,
+                    reference_pos,
+                    predecessor,
+                    query_pos,
+                    reference_pos,
+                    reference_mod_pos,
+                )
+            else:
+                state = (
+                    1,
+                    query_pos,
+                    query_pos,
+                    reference_pos,
+                    reference_pos,
+                    -1,
+                    query_pos,
+                    reference_pos,
+                    reference_mod_pos,
+                )
+            state_index = len(states)
+            states.append(state)
+            group_updates.append((rank, state_index))
+            best_state = better(state_index, best_state)
+            index += 1
+        for rank, state_index in group_updates:
+            update(rank, state_index)
+
+    chain: List[Tuple[int, int, int]] = []
+    state_index = best_state
+    while state_index >= 0:
+        state = states[state_index]
+        chain.append((state[6], state[7], state[8]))
+        state_index = state[5]
+    chain.reverse()
+    return chain
 
 
 def longest_continuous_kmer_chain(positions: List[int], kmer_size: int, stride: int) -> Tuple[int, int]:

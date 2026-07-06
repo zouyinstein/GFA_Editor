@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import platform
 import sys
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -12,6 +13,17 @@ win_icon = project_root / "packaging" / "icons" / "GFA_Editor.ico"
 exe_icon = str(win_icon) if sys.platform == "win32" and win_icon.exists() else None
 bundle_icon = str(mac_icon) if mac_icon.exists() else None
 
+
+def platform_key():
+    machine = platform.machine().lower()
+    if sys.platform == "darwin":
+        return "macos-arm64" if machine in {"arm64", "aarch64"} else "macos-x86_64"
+    if sys.platform.startswith("linux"):
+        return "linux-arm64" if machine in {"arm64", "aarch64"} else "linux-x86_64"
+    if sys.platform.startswith("win"):
+        return "windows-x86_64"
+    return f"{sys.platform}-{machine or 'unknown'}"
+
 datas = [
     (str(project_root / "frontend"), "frontend"),
     (str(project_root / "examples"), "examples"),
@@ -21,7 +33,12 @@ datas = [
 
 bin_root = project_root / "packaging" / "bin"
 if bin_root.exists():
-    datas.append((str(bin_root), "packaging/bin"))
+    bin_readme = bin_root / "README.md"
+    if bin_readme.exists():
+        datas.append((str(bin_readme), "packaging/bin"))
+    platform_bin = bin_root / platform_key()
+    if platform_bin.exists():
+        datas.append((str(platform_bin), f"packaging/bin/{platform_bin.name}"))
 
 hiddenimports = [
     *collect_submodules("backend"),
@@ -86,8 +103,8 @@ if sys.platform == "darwin":
         icon=bundle_icon,
         bundle_identifier="local.gfa-editor",
         info_plist={
-            "CFBundleShortVersionString": "1.3.2",
-            "CFBundleVersion": "1.3.2",
+            "CFBundleShortVersionString": "1.3.3",
+            "CFBundleVersion": "1.3.3",
             "NSHighResolutionCapable": True,
             "NSRequiresAquaSystemAppearance": False,
         },

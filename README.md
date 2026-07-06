@@ -2,7 +2,7 @@
   <img src="frontend/app-icon.png" alt="GFA Editor app icon" width="96">
 </p>
 
-# GFA Editor v1.3.2
+# GFA Editor v1.3.3
 
 GFA Editor is a local Bandage-style viewer and editor for GFA assembly graphs. It provides Cose, Band, and Twin visualization modes, graph editing, alignment visualization, local/server file management, and GFA, FASTA, SVG, and PDF export.
 
@@ -85,6 +85,7 @@ Other scripted operations mirror common toolbar actions:
 
 ```bash
 scripts/gfa_editor_cli.py stats graph.gfa
+scripts/gfa_editor_cli.py --version
 scripts/gfa_editor_cli.py export graph.gfa graph.fa --format fasta
 scripts/gfa_editor_cli.py duplicate graph.gfa duplicated.gfa utg12
 scripts/gfa_editor_cli.py repeat duplicated.gfa resolved.gfa utg12 utg12_copy1 --strategy A
@@ -95,6 +96,7 @@ The macOS standalone app can also be used directly as the same CLI when launched
 
 ```bash
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --candidate 0
+/Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor --version
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-merge graph.gfa graph.merged.gfa --candidate 2 --resolved-output graph.resolved.gfa
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor auto-repeat graph.gfa graph.resolved.gfa --reference-fasta reference.fa
 /Applications/GFA_Editor.app/Contents/MacOS/GFA_Editor image graph.gfa graph.pdf --colour blastsolid --query multi_fasta.fa --alignment-tool minimap2 --alignment-args "-x asm5 -c --secondary=yes"
