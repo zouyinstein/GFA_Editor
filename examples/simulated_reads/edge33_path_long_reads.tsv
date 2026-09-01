@@ -1,7 +1,0 @@
-read_id	length	purpose	intended_graph_path	paf_targets
-sim_edge33_internal_12001_18000	6000	internal partial read on edge_33 positions 12001-18000	edge_33:12001-18000	edge_33
-sim_edge33_internal_36001_43000	7000	second internal partial read on edge_33 positions 36001-43000	edge_33:36001-43000	edge_33
-sim_link_edge11_to_edge33	2000	read crossing the edge_11+ -> edge_33+ link	edge_11+ -> edge_33+	edge_11,edge_33
-sim_link_edge25_to_edge33_reverse_side	2000	read crossing the edge_25- -> edge_33- link	edge_25- -> edge_33-	edge_25,edge_33
-sim_path_edge8_edge11_edge33	10252	long read from repeat edge_8 through full edge_11 into edge_33	edge_8+ -> edge_11+ -> edge_33+	edge_8,edge_11,edge_33
-sim_edge33_long_5001_25000	20000	long partial read spanning a broad internal section of edge_33	edge_33:5001-25000	edge_33

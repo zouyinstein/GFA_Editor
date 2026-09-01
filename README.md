@@ -34,6 +34,13 @@ Stop the service:
 scripts/stop_local.sh
 ```
 
+## Operation Videos
+
+The following 4K/60 fps demonstrations include concise English subtitles:
+
+- [Part 01: Manual graph editing and export](video/GFA_Editor_Operation_Demo_Part_01_English_Subtitles.mp4) — import a GFA graph, remove disconnected items and an unwanted Link, resolve repeat nodes, merge paths, compare layouts, and export the edit history, GFA, and FASTA files.
+- [Part 02: Edit-history replay and inspection](video/GFA_Editor_Operation_Demo_Part_02_English_Subtitles.mp4) — load the original graph, apply a saved edit history, restore selected history steps, and inspect intermediate and final graph states in Twin view.
+
 ## Command Line
 
 GFA Editor also ships a CLI wrapper for the core viewer/editor operations:
